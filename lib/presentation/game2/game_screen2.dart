@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,14 +27,23 @@ class GameScreen2 extends ConsumerStatefulWidget {
 }
 
 class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderStateMixin, WidgetsBindingObserver {
+  // 🎯 크리티컬 연출 스위치 (끄려면 false로만 변경)
+  static const bool _game2CriticalEffectEnabled = true;
+
   Timer? _hideNavBarTimer;
 
   // 애니메이션 컨트롤러
   AnimationController? _shakeController;
   AnimationController? _flashController;
   AnimationController? _pulseController;
+  AnimationController? _criticalShakeController; // 🎯 크리티컬 강한 흔들림
+  AnimationController? _criticalTextController; // 🎯 CRITICAL! 텍스트
   Animation<double>? _shakeAnimation;
   Animation<double>? _flashAnimation;
+
+  // 🎯 크리티컬 상태
+  bool _showCriticalText = false;
+  Offset? _lastTouchLocalPos; // 마지막 터치 좌표 (크리티컬 큰 이펙트 위치용)
 
   // 초기화 시간 관리를 위한 타이머들
   Timer? _maintenanceWarningTimer;
@@ -71,6 +81,9 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
     // ✅ 소환 완료 시 전면광고 콜백 설정 (5단계 이상, 플러스 선택 제거됨)
     notifier.onShowSummonCompleteAd = _showSummonCompleteAd;
 
+    // 🎯 크리티컬 연출 콜백 설정
+    notifier.onCritical = _triggerCriticalEffect;
+
     // 게임 이벤트 리스너 등록
     _listenGameEvents();
 
@@ -95,6 +108,11 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
     // 플래시 애니메이션 (지속 시간 증가: 500ms -> 800ms)
     _flashController = AnimationController(duration: const Duration(milliseconds: 800), vsync: this);
     _flashAnimation = Tween<double>(begin: 0, end: 1).animate(CurvedAnimation(parent: _flashController!, curve: Curves.easeOut));
+
+    // 🎯 크리티컬 강한 흔들림 (일반보다 크고 오래)
+    _criticalShakeController = AnimationController(duration: const Duration(milliseconds: 320), vsync: this);
+    // 🎯 CRITICAL! 텍스트 (커졌다 사라짐, 약 0.6초)
+    _criticalTextController = AnimationController(duration: const Duration(milliseconds: 600), vsync: this);
 
     // 펄스 애니메이션 (TOUCH ME 텍스트 및 소환 효과용)
     // duration을 늘리면 천천히, 줄이면 빠르게 펄싱됩니다
@@ -254,6 +272,14 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
     _flashController?.stop();
     _flashController?.dispose();
     _flashController = null;
+
+    _criticalShakeController?.stop();
+    _criticalShakeController?.dispose();
+    _criticalShakeController = null;
+
+    _criticalTextController?.stop();
+    _criticalTextController?.dispose();
+    _criticalTextController = null;
 
     _pulseController?.stop();
     _pulseController?.dispose();
@@ -554,10 +580,17 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
                   _autoTouchTimer = null;
                 },
                 child: AnimatedBuilder(
-                  animation: _shakeAnimation!,
+                  // 🎯 일반 흔들림 + 크리티컬 강한 흔들림을 함께 반영
+                  animation: Listenable.merge([_shakeController!, _criticalShakeController!]),
                   builder: (context, child) {
+                    final double normalShake = state.isShaking ? _shakeAnimation!.value : 0.0;
+                    // 크리티컬: 진폭 큰 감쇠 진동 (좌우 + 약간의 상하)
+                    final double critV = _criticalShakeController!.value;
+                    final double critShake = _criticalShakeController!.isAnimating
+                        ? sin(critV * pi * 5) * 24 * (1 - critV)
+                        : 0.0;
                     return Transform.translate(
-                      offset: Offset(state.isShaking ? _shakeAnimation!.value : 0, 0),
+                      offset: Offset(normalShake + critShake, critShake * 0.5),
                       child: Stack(
                         alignment: Alignment.center,
                         children: [
@@ -593,6 +626,43 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
             child: _buildTouchEffects(),
           ),
         ),
+        // 🎯 CRITICAL! 텍스트 오버레이 (커졌다 사라짐)
+        if (_showCriticalText)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Center(
+                child: AnimatedBuilder(
+                  animation: _criticalTextController!,
+                  builder: (context, child) {
+                    final double v = _criticalTextController!.value;
+                    final double scale = 0.6 + v * 0.9; // 커지며
+                    final double opacity = (1.0 - v).clamp(0.0, 1.0); // 사라짐
+                    return Opacity(
+                      opacity: opacity,
+                      child: Transform.scale(
+                        scale: scale,
+                        child: Transform.rotate(
+                          angle: -0.12,
+                          child: Text(
+                            'CRITICAL!',
+                            style: TextStyle(
+                              fontSize: 46,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.amber,
+                              letterSpacing: 1.0,
+                              shadows: const [
+                                Shadow(color: Colors.red, blurRadius: 10, offset: Offset(2, 2)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -866,10 +936,11 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
     final RenderBox? stackBox = _piggyStackKey.currentContext?.findRenderObject() as RenderBox?;
     if (stackBox != null) {
       final Offset localPosition = stackBox.globalToLocal(globalPosition);
+      _lastTouchLocalPos = localPosition; // 🎯 크리티컬 큰 이펙트 위치용 저장
       _addTouchEffect(localPosition);
     }
 
-    // 터치 처리 (사운드 + 내구도 감소)
+    // 터치 처리 (사운드 + 내구도 감소, 크리티컬 판정 → onCritical 콜백)
     ref.read(game2Provider.notifier).touchPiggyBank();
 
     // 흔들림 애니메이션
@@ -878,16 +949,35 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
     });
   }
 
-  // 터치 효과 추가
-  void _addTouchEffect(Offset position) {
-    print('💫 터치 효과 추가: $position');
-    print('💫 현재 효과 개수: ${_touchEffects.length}');
+  // 🎯 크리티컬 연출 트리거 (provider의 touchPiggyBank에서 5% 확률로 호출)
+  void _triggerCriticalEffect() {
+    if (!mounted || !_game2CriticalEffectEnabled) return;
 
+    // 1) 터치 지점에 일반보다 크고 강한 이펙트
+    if (_lastTouchLocalPos != null) {
+      _addTouchEffect(_lastTouchLocalPos!, critical: true);
+    }
+
+    // 2) 강한 흔들림
+    _criticalShakeController?.forward(from: 0).then((_) {
+      _criticalShakeController?.reset();
+    });
+
+    // 3) CRITICAL! 텍스트 (커졌다 사라짐)
+    setState(() => _showCriticalText = true);
+    _criticalTextController?.forward(from: 0).then((_) {
+      if (mounted) setState(() => _showCriticalText = false);
+    });
+  }
+
+  // 터치 효과 추가 (critical=true면 더 크고 강한 이펙트)
+  void _addTouchEffect(Offset position, {bool critical = false}) {
     final effect = TouchEffect(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
       position: position,
+      critical: critical,
       animation: AnimationController(
-        duration: const Duration(milliseconds: 300), // 800ms → 300ms로 단축
+        duration: Duration(milliseconds: critical ? 450 : 300),
         vsync: this,
       ),
     );
@@ -917,14 +1007,18 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
     return IgnorePointer(
       child: Stack(
         children: _touchEffects.map((effect) {
+          // 🎯 크리티컬 이펙트는 일반보다 크게
+          final double baseSize = effect.critical ? 150.0 : 80.0;
+          final double half = baseSize / 2;
           return Positioned(
-            left: effect.position.dx - 50,
-            top: effect.position.dy - 50,
+            left: effect.position.dx - half,
+            top: effect.position.dy - half,
             child: AnimatedBuilder(
               animation: effect.animation,
               builder: (context, child) {
                 final value = effect.animation.value;
-                final scale = 0.8 + (value * 1.5); // 더 큰 확대 효과
+                // 크리티컬은 더 크게 퍼짐
+                final scale = 0.8 + (value * (effect.critical ? 2.2 : 1.5));
                 final opacity = (1.0 - value).clamp(0.0, 1.0); // 더 빠르게 사라짐
 
                 return Transform.scale(
@@ -932,13 +1026,13 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
                   child: Opacity(
                     opacity: opacity,
                     child: Container(
-                      width: 80, // 크기 축소 (100 → 80)
-                      height: 80,
+                      width: baseSize,
+                      height: baseSize,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         border: Border.all(
                           color: Colors.yellow.withAlpha((255 * opacity).toInt()),
-                          width: 3,
+                          width: effect.critical ? 5 : 3,
                         ),
                         gradient: RadialGradient(
                           colors: [
@@ -967,10 +1061,12 @@ class TouchEffect {
   final String id;
   final Offset position;
   final AnimationController animation;
+  final bool critical; // 🎯 크리티컬이면 더 크고 강하게
 
   TouchEffect({
     required this.id,
     required this.position,
     required this.animation,
+    this.critical = false,
   });
 }

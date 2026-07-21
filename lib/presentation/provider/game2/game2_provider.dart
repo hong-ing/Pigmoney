@@ -32,8 +32,18 @@ class Game2Notifier extends StateNotifier<Game2State> {
   int _touchIdx = 0;
   bool _soundReady = false;
 
+  // 🎯 크리티컬 시스템 스위치 (끄려면 false로만 변경)
+  static const bool _game2CriticalEnabled = true;
+  static const double _criticalChance = 0.05; // 5% 확률
+  static const int _criticalDamage = 10; // 크리티컬 시 내구도 감소량
+
+  final Random _random = Random();
+
   // 콜백 함수
   Function()? onPiggyBankBroken;
+
+  // 🎯 크리티컬 발동 시 UI 연출 콜백 (강한 흔들림/큰 이펙트/CRITICAL 텍스트)
+  Function()? onCritical;
 
   // ✅ 저금통 깨질 때 전면광고 준비 다이얼로그 콜백 (모든 단계)
   Function(String message, VoidCallback onComplete)? onShowBreakAdPreparationDialog;
@@ -157,15 +167,17 @@ class Game2Notifier extends StateNotifier<Game2State> {
   }
 
   // 터치 사운드 재생 (재사용 풀 사용 - NEW 플레이어/ setAudioContext 없음 → iOS BGM 세션 보호)
-  void playTouchSound() {
+  void playTouchSound({bool critical = false}) {
     try {
       if (!ref.read(settingsProvider).isSfxEnabled || !_soundReady) return;
 
-      // 풀에서 다음 플레이어 선택 (라운드로빈). 컨텍스트/볼륨은 설정 시 1회만.
+      // 풀에서 다음 플레이어 선택 (라운드로빈). 컨텍스트는 설정 시 1회만.
       final player = _touchPool[_touchIdx];
       _touchIdx = (_touchIdx + 1) % _touchPool.length;
 
       player.stop(); // 재생 중이면 처음으로 리셋 (setCategory/setActive 미유발)
+      // 크리티컬은 더 크게 (일반 0.15 → 크리티컬 0.5). setVolume은 세션 재구성 없음.
+      player.setVolume(critical ? 0.5 : 0.15);
       player.play(AssetSource('audio/game2_touch.mp3'));
     } catch (e) {
       print('❌ 터치 사운드 재생 실패: $e');
@@ -240,18 +252,31 @@ class Game2Notifier extends StateNotifier<Game2State> {
   void touchPiggyBank() {
     if (!state.isPiggyBankActive || state.currentDurability <= 0) return;
 
-    // 터치 사운드 재생
-    playTouchSound();
+    // 🎯 크리티컬 판정 (5% 확률)
+    final bool isCritical = _game2CriticalEnabled && _random.nextDouble() < _criticalChance;
 
-    // 진동
-    HapticFeedback.lightImpact();
+    // 터치 사운드 재생 (크리티컬은 더 크게)
+    playTouchSound(critical: isCritical);
 
-    // 내구도 감소
-    final newDurability = state.currentDurability - 1;
+    // 진동 - 일반: medium(강함), 크리티컬: heavy(더 강함)
+    if (isCritical) {
+      HapticFeedback.heavyImpact();
+    } else {
+      HapticFeedback.mediumImpact();
+    }
+
+    // 내구도 감소 (크리티컬 -10, 일반 -1). 0 밑으로는 내려가지 않게 clamp.
+    final int damage = isCritical ? _criticalDamage : 1;
+    final int newDurability = (state.currentDurability - damage).clamp(0, state.maxDurability);
     state = state.copyWith(
       currentDurability: newDurability,
       isShaking: true,
     );
+
+    // 🎯 크리티컬 연출 콜백 (강한 흔들림/큰 이펙트/CRITICAL 텍스트)
+    if (isCritical) {
+      onCritical?.call();
+    }
 
     // 쉐이킹 효과 제거
     Future.delayed(const Duration(milliseconds: 100), () {
