@@ -596,8 +596,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
       alignment: Alignment.center,
       clipBehavior: Clip.none, // 잘림 방지
       children: [
-        // 룰렛 이미지 (자동적립 돼지와 동일한 크기)
-        Image.asset('assets/icons/ic_roulette.png', width: 80, height: 80).pOnly(bottom: 10),
+        // 룰렛 이미지 (양옆 자동적립/만보기와 시각적 균형을 위해 만보기와 동일한 67px)
+        Image.asset('assets/icons/ic_roulette.png', width: 67, height: 67).pOnly(bottom: 10),
 
         // 룰렛 위에 머니 표시
         if (rouletteMoney > 0) ...{
@@ -668,8 +668,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
       alignment: Alignment.center,
       clipBehavior: Clip.none, // 잘림 방지
       children: [
-        // 룰렛 이미지 (자동적립 돼지와 동일한 크기)
-        Image.asset('assets/icons/ic_dice.png', width: 80, height: 80).pOnly(bottom: 10),
+        // 주사위 이미지 (양옆 자동적립/만보기와 시각적 균형을 위해 만보기와 동일한 67px)
+        Image.asset('assets/icons/ic_dice.png', width: 67, height: 67).pOnly(bottom: 10),
 
         // 룰렛 위에 머니 표시
         if (diceMoney > 0) ...{
