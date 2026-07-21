@@ -1,0 +1,23 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "deferredDeepLinks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "clientIp",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "deviceModel",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

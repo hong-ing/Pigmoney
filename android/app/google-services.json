@@ -1,0 +1,55 @@
+{
+  "project_info": {
+    "project_number": "726973237119",
+    "project_id": "cashbank-a1c93",
+    "storage_bucket": "cashbank-a1c93.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:726973237119:android:f02ae645e7992c74ebbc4a",
+        "android_client_info": {
+          "package_name": "com.reviewtube.pigmoney"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "726973237119-0i2beuub2r1jna2dq5m075oof6kb77u8.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.reviewtube.pigmoney",
+            "certificate_hash": "6fa6edbd63c7a63f89acf1217933e2f4936dff75"
+          }
+        },
+        {
+          "client_id": "726973237119-6tmccuomp42k5p0vfb3qeu5s3dvhh1ih.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB2wNWMb5IDiHPmOTYFY_LelN89ZcHHtu0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "726973237119-6tmccuomp42k5p0vfb3qeu5s3dvhh1ih.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "726973237119-5vk5itor48u6dki5193ebbpaqsjvik2t.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.reviewtube.pigmoney"
+              }
+            }
+          ]
+        }
+      },
+      "admob_app_id": "ca-app-pub-5611155584412903~6551948944"
+    }
+  ],
+  "configuration_version": "1"
+}

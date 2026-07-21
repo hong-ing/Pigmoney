@@ -1,0 +1,207 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 라이브러리가 자동으로 추가하는 미디어 권한을 명시적으로 제거 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove" />
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- TNK 오퍼월 필수 권한 -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+
+    <!-- 만보기 (Step Counter Sensor) 권한 -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
+
+    <!-- 배터리 최적화 예외: 백그라운드 만보기 안정 동작 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <application
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:label="피그머니"
+        android:allowBackup="false"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules">
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|density|uiMode"
+            android:exported="true"
+            android:hardwareAccelerated="true"
+            android:alwaysRetainTaskState="true"
+            android:launchMode="singleTask"
+            android:theme="@style/LaunchTheme"
+            android:resizeableActivity="false"
+            android:supportsPictureInPicture="false"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- App Links for invite deep linking -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https"
+                    android:host="cashbank-a1c93.web.app"
+                    android:pathPrefix="/invite" />
+            </intent-filter>
+
+            <!-- Custom URL scheme fallback -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pigmoney"
+                    android:host="invite" />
+            </intent-filter>
+        </activity>
+
+        <!-- Kakao Login Redirect Activity -->
+        <activity
+            android:name="com.kakao.sdk.flutter.AuthCodeCustomTabsActivity"
+            android:exported="true">
+            <intent-filter android:label="flutter_web_auth">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <!-- Replace with your actual Kakao app key -->
+                <data android:scheme="kakao8d24e47d36d059d5474ec50ef688cd28"
+                    android:host="oauth"/>
+            </intent-filter>
+        </activity>
+
+        <!-- Pincrux View Type Activity -->
+        <activity
+            android:name=".PincruxViewTypeActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar" />
+
+        <!-- 보안 환경 요구 (소셜 엔지니어링 악용 방지) -->
+        <meta-data
+            android:name="REQUIRE_SECURE_ENV"
+            android:value="true" />
+
+        <!-- 네이티브 만보기 서비스 -->
+        <service
+            android:name=".StepCounterService"
+            android:foregroundServiceType="health"
+            android:stopWithTask="false"
+            android:exported="false" />
+
+        <!-- 부팅 시 만보기 서비스 자동 시작 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter android:priority="1000">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 보안 환경 요구 (소셜 엔지니어링 악용 방지) -->
+        <meta-data
+            android:name="REQUIRE_SECURE_ENV"
+            android:value="true" />
+
+        <!-- Impeller 비활성화 (SIGSEGV 충돌 방지 - 특정 GPU/광고 SDK 호환성 문제) -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
+
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+        <!-- Sample AdMob app ID: ca-app-pub-3940256099942544~3347511713 -->
+        <!-- Release AdMob app ID: ca-app-pub-5611155584412903~6551948944 -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-5611155584412903~6551948944" />
+
+        <!-- Kakao Native App Key (Replace with your actual app key) -->
+        <meta-data
+            android:name="com.kakao.sdk.AppKey"
+            android:value="8d24e47d36d059d5474ec50ef688cd28" />
+
+        <!-- TNK 오퍼월 앱 ID -->
+        <meta-data
+            android:name="tnkad_app_id"
+            android:value="b0004080-3081-2928-8292-1708030f040d" />
+
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
+            android:exported="false" />
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+    <!-- Required to query activities that can process text, see:
+         https://developer.android.com/training/package-visibility and
+         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+
+         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT" />
+            <data android:mimeType="text/plain" />
+        </intent>
+
+        <!-- 다중계정 앱 감지를 위한 특정 패키지 쿼리 -->
+        <package android:name="com.excelliance.multiaccounts" />
+        <package android:name="com.lody.virtual" />
+        <package android:name="com.polestar.multiaccount" />
+        <package android:name="com.jumobile.multiaccounts" />
+        <package android:name="com.applisto.appcloner" />
+        <package android:name="com.parallel.space.lite" />
+        <package android:name="com.lbe.parallel.intl.arm64" />
+        <package android:name="com.multiplebox.droidapps" />
+        <package android:name="com.ludashi.dualspace" />
+        <package android:name="com.excean.parallelspace" />
+        <package android:name="com.excelliance.multiaccount" />
+        <package android:name="multi.parallel.dualspace.cloner" />
+        <package android:name="com.pengyou.cloneapp" />
+        <package android:name="com.cmaster.cloner" />
+        <package android:name="com.excelliance.multiaccounts.b32" />
+        <package android:name="co.keeptop.multi.space" />
+        <package android:name="com.clone.android.dual.space" />
+        <package android:name="com.dong.multirun" />
+        <package android:name="com.ludashi.superboost" />
+        <package android:name="grape.products.keyhop" />
+        <package android:name="com.waxmoon.ma.gp" />
+        <package android:name="com.pspace.vandroid" />
+        <package android:name="com.polestar.super.clone" />
+        <package android:name="virtual.app.clone.app" />
+        <package android:name="com.mtech.multiple" />
+        <package android:name="com.xunijun.app.gp" />
+        <package android:name="do.multiple.cloner" />
+    </queries>
+</manifest>

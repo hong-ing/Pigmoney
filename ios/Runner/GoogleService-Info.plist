@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>726973237119-5vk5itor48u6dki5193ebbpaqsjvik2t.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.726973237119-5vk5itor48u6dki5193ebbpaqsjvik2t</string>
+	<key>ANDROID_CLIENT_ID</key>
+	<string>726973237119-0f43gl3cv4tkr7823b7moak4qbssn1lg.apps.googleusercontent.com</string>
+	<key>API_KEY</key>
+	<string>AIzaSyD6YvNoHOASzh4bgNElIAMJkWLgdU5rT9w</string>
+	<key>GCM_SENDER_ID</key>
+	<string>726973237119</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.reviewtube.pigmoney</string>
+	<key>PROJECT_ID</key>
+	<string>cashbank-a1c93</string>
+	<key>STORAGE_BUCKET</key>
+	<string>cashbank-a1c93.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:726973237119:ios:5f77385c2d8caf9aebbc4a</string>
+</dict>
+</plist>

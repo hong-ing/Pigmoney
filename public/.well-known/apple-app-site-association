@@ -1,0 +1,16 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appIDs": ["TEAMID.com.reviewtube.pigmoney"],
+        "components": [
+          {
+            "/": "/invite/*",
+            "comment": "Matches invite links"
+          }
+        ]
+      }
+    ]
+  }
+}

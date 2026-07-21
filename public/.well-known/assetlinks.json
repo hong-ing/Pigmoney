@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.reviewtube.pigmoney",
+      "sha256_cert_fingerprints": [
+        "25:1A:C9:CF:00:16:41:AC:5D:8B:F7:74:70:77:00:ED:EA:28:D0:67:2D:CA:65:61:07:40:78:46:55:C5:F8:C0"
+      ]
+    }
+  }
+]

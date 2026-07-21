@@ -1,0 +1,29 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../provider/game/game_provider.dart';
+
+class RefillGuideText extends ConsumerWidget {
+  const RefillGuideText({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final luckyBagCount = ref.watch(gameProvider.select((s) => s.luckyBagCount));
+    final floorCoinsEmpty = ref.watch(gameProvider.select((s) => s.floorCoins.isEmpty));
+    final refillCount = ref.watch(gameProvider.select((s) => s.rewardRefillCount));
+
+    if (luckyBagCount <= 0 && floorCoinsEmpty) {
+      return Center(
+        child: Container(
+          padding: const EdgeInsets.only(left: 20, right: 20, bottom: 150),
+          decoration: BoxDecoration(color: Colors.transparent, borderRadius: BorderRadius.circular(10)),
+          child: Text(
+            refillCount == 0 ? "내일 다시 만나요😘" : '상자에 동전을 채워주세요',
+            style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+          ),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+}
