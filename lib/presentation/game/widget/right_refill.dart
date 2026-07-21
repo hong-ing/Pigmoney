@@ -226,7 +226,8 @@ class _RightRefillButtonState extends ConsumerState<RightRefillButton> {
                           Image.asset(_getRefillOnIconPath(currentRound), width: 120, height: 120),
                           '$coinsToShow'
                               .text
-                              .color(currentRound >= 3 ? Colors.black : Color(0xffFFC927))
+                              // 지갑 버튼의 현재 동전 수(50/50 왼쪽 숫자)와 동일한 귤색으로 통일
+                              .color(Colors.amber.shade400)
                               .size(24)
                               .bold
                               .make()

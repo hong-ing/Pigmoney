@@ -46,6 +46,18 @@ class GameNotifier extends StateNotifier<GameState> {
   // 🧪 테스트용 설정 - 실제 배포 시에는 false로 설정
   static const bool _isTestMode = false; // ← 테스트할 때는 true로 변경
 
+  // 🧲 자석 버프 기능 스위치 (끄려면 false로만 변경, 버튼 표시 여부도 함께 제어됨)
+  static const bool magnetBuffEnabled = true;
+  static const int _magnetModeDurationSeconds = 30; // 자석 모드 지속 시간 (초)
+  static const int _magnetCooldownSeconds = 600; // 발동 종료 후 쿨타임 (10분)
+  static const String _magnetLastEndTimeKey = 'lastMagnetModeEndTime';
+  static const String _magnetBuffOwnedKey = 'magnetBuffOwned';
+  Timer? _magnetModeTimer;
+  Timer? _magnetCooldownTimer;
+
+  // 🪙 바닥에 항상 유지되는 동전 개수
+  static const int _maxFloorCoins = 10;
+
   // BGM은 BgmService 싱글톤에서 관리 (화면 전환 시에도 재생 위치 유지)
   final AudioPlayer _depositPlayer = AudioPlayer();
   final AudioCache _sfxCoinCache = AudioCache(prefix: 'audio/');
@@ -145,6 +157,7 @@ class GameNotifier extends StateNotifier<GameState> {
     globalGameNotifierRef = this; // 전역 참조 설정
     _initialize();
     _setupConnectivityListener();
+    _loadMagnetBuffState(); // 🧲 자석 버프 보유/쿨타임 상태 복원
   }
 
   Coin _generateRandomCoin(Offset position) {
@@ -459,6 +472,9 @@ class GameNotifier extends StateNotifier<GameState> {
         if (adSuccess) {
           // 광고 성공 시 적립 (기존/신규유저 모두 2배 — 다이얼로그 표시와 일치)
           await _claimTempMoneyInternal(2);
+
+          // 🧲 광고 시청 성공 시 자석 버프 지급 (10분 쿨다운)
+          await _grantMagnetBuffIfEligible();
         }
       },
       onAdFailedToShow: (error) {
@@ -467,6 +483,159 @@ class GameNotifier extends StateNotifier<GameState> {
         onShowAdLoadingSnackBar?.call('광고 로딩에 실패했습니다. 다시 시도해주세요.');
       },
     );
+  }
+
+  /// 🧲 앱 시작 시 자석 버프 보유/쿨타임 상태 복원
+  Future<void> _loadMagnetBuffState() async {
+    if (!magnetBuffEnabled) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_isDisposed || _isNotifierDisposed) return;
+
+      // 보유 상태 복원 (최대 1개)
+      final owned = prefs.getBool(_magnetBuffOwnedKey) ?? false;
+
+      // 마지막 발동 종료 시각 기준으로 남은 쿨타임 계산
+      final lastEndMillis = prefs.getInt(_magnetLastEndTimeKey) ?? 0;
+      final elapsedSeconds = (DateTime.now().millisecondsSinceEpoch - lastEndMillis) ~/ 1000;
+      final cooldownRemaining = max(0, _magnetCooldownSeconds - elapsedSeconds);
+
+      state = state.copyWith(
+        magnetBuffCount: owned ? 1 : 0,
+        magnetCooldownRemainingSeconds: cooldownRemaining,
+      );
+
+      if (cooldownRemaining > 0) {
+        _startMagnetCooldownTimer();
+      }
+      print('🧲 자석 상태 복원: 보유=$owned, 쿨타임 남은 시간=$cooldownRemaining초');
+    } catch (e) {
+      print('🧲 자석 상태 복원 에러: $e');
+    }
+  }
+
+  /// 🧲 자석 버프 보유 상태 저장
+  Future<void> _saveMagnetBuffOwned(bool owned) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_magnetBuffOwnedKey, owned);
+    } catch (e) {
+      print('🧲 자석 보유 상태 저장 에러: $e');
+    }
+  }
+
+  /// 🧲 자석 버프 지급 (리워드 광고 시청 성공 시 호출)
+  /// - 이미 보유 중이면 지급하지 않음 (최대 1개, 누적 불가)
+  /// - 쿨타임(마지막 발동 종료 후 10분) 진행 중에는 지급하지 않음
+  Future<void> _grantMagnetBuffIfEligible() async {
+    if (!magnetBuffEnabled) return;
+    if (_isDisposed || _isNotifierDisposed) return;
+    if (state.magnetBuffCount >= 1) {
+      print('🧲 이미 자석 보유 중 - 지급 생략');
+      return;
+    }
+    if (state.magnetCooldownRemainingSeconds > 0) {
+      print('🧲 쿨타임 진행 중(${state.magnetCooldownRemainingSeconds}초 남음) - 지급 생략');
+      return;
+    }
+
+    state = state.copyWith(magnetBuffCount: 1);
+    await _saveMagnetBuffOwned(true);
+    print('🧲 자석 버프 지급!');
+  }
+
+  /// 🧲 지금 광고를 보면 자석이 실제로 지급되는 상태인지 (2배 수집 다이얼로그 아이콘 표시용)
+  bool get willGrantMagnetOnAd =>
+      magnetBuffEnabled && state.magnetBuffCount == 0 && state.magnetCooldownRemainingSeconds == 0;
+
+  /// 🧲 자석 버프 발동 - 30초간 자석 모드 활성화
+  void activateMagnetBuff() {
+    if (!magnetBuffEnabled) return;
+    if (_isDisposed || _isNotifierDisposed) return;
+    if (state.magnetBuffCount <= 0) return;
+    if (state.isMagnetModeActive) return; // 이미 활성화 중이면 중복 발동 방지
+    if (state.magnetCooldownRemainingSeconds > 0) return; // 쿨타임 중에는 발동 불가
+
+    state = state.copyWith(
+      magnetBuffCount: 0, // 보유분 소모 (최대 1개)
+      isMagnetModeActive: true,
+      magnetRemainingSeconds: _magnetModeDurationSeconds,
+    );
+    _saveMagnetBuffOwned(false);
+
+    _magnetModeTimer?.cancel();
+    _magnetModeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_isDisposed || _isNotifierDisposed) {
+        timer.cancel();
+        return;
+      }
+      final remaining = state.magnetRemainingSeconds - 1;
+      if (remaining <= 0) {
+        _deactivateMagnetMode();
+      } else {
+        state = state.copyWith(magnetRemainingSeconds: remaining);
+      }
+    });
+    print('🧲 자석 모드 발동! (${_magnetModeDurationSeconds}초)');
+  }
+
+  /// 🧲 자석 모드 해제 - 종료 시점부터 10분 쿨타임 시작 (종료 시각은 로컬 저장)
+  void _deactivateMagnetMode() {
+    _magnetModeTimer?.cancel();
+    _magnetModeTimer = null;
+    if (_isDisposed || _isNotifierDisposed) return;
+
+    state = state.copyWith(
+      isMagnetModeActive: false,
+      magnetRemainingSeconds: 0,
+      magnetCooldownRemainingSeconds: _magnetCooldownSeconds,
+    );
+
+    // 발동 종료 시각 저장 (앱 재시작해도 쿨타임 유지)
+    SharedPreferences.getInstance().then((prefs) => prefs.setInt(_magnetLastEndTimeKey, DateTime.now().millisecondsSinceEpoch));
+
+    _startMagnetCooldownTimer();
+    print('🧲 자석 모드 해제 - 쿨타임 ${_magnetCooldownSeconds}초 시작');
+  }
+
+  /// 🧲 자석 쿨타임 카운트다운 타이머
+  void _startMagnetCooldownTimer() {
+    _magnetCooldownTimer?.cancel();
+    _magnetCooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_isDisposed || _isNotifierDisposed) {
+        timer.cancel();
+        return;
+      }
+      final remaining = state.magnetCooldownRemainingSeconds - 1;
+      if (remaining <= 0) {
+        timer.cancel();
+        _magnetCooldownTimer = null;
+        state = state.copyWith(magnetCooldownRemainingSeconds: 0);
+        print('🧲 자석 쿨타임 종료');
+      } else {
+        state = state.copyWith(magnetCooldownRemainingSeconds: remaining);
+      }
+    });
+  }
+
+  /// 🧲 터치한 동전과 가장 가까운 바닥 동전 찾기 (자석 모드용)
+  Coin? _findNearestFloorCoin(Coin tappedCoin) {
+    Coin? nearest;
+    double nearestDistance = double.infinity;
+
+    for (final coin in state.floorCoins) {
+      if (coin.id == tappedCoin.id) continue;
+      if (state.selectedCoinIds.contains(coin.id)) continue; // 이미 수집 중인 동전 제외
+      if (coin.animationState != CoinAnimationState.none) continue;
+
+      final distance = (coin.position - tappedCoin.position).distance;
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = coin;
+      }
+    }
+    return nearest;
   }
 
   /// 💰 로컬 tempMoney를 서버로 전송 (오퍼월 방식)
@@ -1098,8 +1267,8 @@ class GameNotifier extends StateNotifier<GameState> {
       pocketRect: pocketUI,
     );
 
-    if (state.floorCoins.length < 5 && state.luckyBagCount > 0 && !state.didInitCoins) {
-      final coinsToAdd = min(5 - state.floorCoins.length, state.luckyBagCount);
+    if (state.floorCoins.length < _maxFloorCoins && state.luckyBagCount > 0 && !state.didInitCoins) {
+      final coinsToAdd = min(_maxFloorCoins - state.floorCoins.length, state.luckyBagCount);
       dropInitialCoins(coinsToAdd);
     }
   }
@@ -1209,7 +1378,7 @@ class GameNotifier extends StateNotifier<GameState> {
     List<Coin> newCoinsBatch = [];
 
     int attempts = 0;
-    const int maxAttempts = 100;
+    const int maxAttempts = 200; // 동전 10개 기준 (개수 증가에 맞춰 시도 횟수 확대)
 
     while (newCoinsBatch.length < coinsToDrop && attempts < maxAttempts) {
       attempts++;
@@ -1318,8 +1487,8 @@ class GameNotifier extends StateNotifier<GameState> {
       return false;
     }
 
-    // 기존 코인들과 너무 가깝지 않은지 체크
-    const double minDistance = coinSize * 0.6; // 60% 거리 유지
+    // 기존 코인들과 너무 가깝지 않은지 체크 (살짝 겹치는 정도는 허용)
+    const double minDistance = coinSize * 0.45; // 45% 거리 유지
     for (final existingCoin in existingCoins) {
       final distance = (pos - existingCoin.position).distance;
       if (distance < minDistance) {
@@ -1339,9 +1508,20 @@ class GameNotifier extends StateNotifier<GameState> {
     // ✅ 즉시 애니메이션 시작 (selectedCoinIds 체크 제거)
     onStartCoinAnimation?.call(tappedCoin);
 
+    // 🧲 자석 모드: 가장 가까운 바닥 동전 1개도 함께 수집
+    Coin? magnetCoin;
+    if (magnetBuffEnabled && state.isMagnetModeActive) {
+      magnetCoin = _findNearestFloorCoin(tappedCoin);
+      if (magnetCoin != null) {
+        onStartCoinAnimation?.call(magnetCoin);
+      }
+    }
+
     // ✅ selectedCoinIds는 나중에 업데이트 (터치 즉시 반응 우선)
-    if (!state.selectedCoinIds.contains(tappedCoin.id)) {
-      final updatedSelectedIds = Set<String>.from(state.selectedCoinIds)..add(tappedCoin.id);
+    final updatedSelectedIds = Set<String>.from(state.selectedCoinIds);
+    updatedSelectedIds.add(tappedCoin.id);
+    if (magnetCoin != null) updatedSelectedIds.add(magnetCoin.id);
+    if (updatedSelectedIds.length != state.selectedCoinIds.length) {
       state = state.copyWith(selectedCoinIds: updatedSelectedIds);
     }
   }
@@ -1388,9 +1568,9 @@ class GameNotifier extends StateNotifier<GameState> {
         selectedCoinIds: updatedSelectedIds,
       );
 
-      // 2. 바닥에 코인이 5개 미만이고 주머니에 코인이 있으면 추가 드롭
-      if (updatedCoins.length < 5 && state.luckyBagCount > 0) {
-        final coinsToAdd = min(5 - updatedCoins.length, state.luckyBagCount);
+      // 2. 바닥에 코인이 _maxFloorCoins개 미만이고 주머니에 코인이 있으면 추가 드롭
+      if (updatedCoins.length < _maxFloorCoins && state.luckyBagCount > 0) {
+        final coinsToAdd = min(_maxFloorCoins - updatedCoins.length, state.luckyBagCount);
         List<Coin> newCoinsToAdd = [];
 
         for (int i = 0; i < coinsToAdd; i++) {
@@ -1773,6 +1953,20 @@ class GameNotifier extends StateNotifier<GameState> {
       _saveDebounceTimer = null;
     } catch (e) {
       print('저장 디바운스 타이머 dispose 에러: $e');
+    }
+
+    try {
+      _magnetModeTimer?.cancel();
+      _magnetModeTimer = null;
+    } catch (e) {
+      print('자석 모드 타이머 dispose 에러: $e');
+    }
+
+    try {
+      _magnetCooldownTimer?.cancel();
+      _magnetCooldownTimer = null;
+    } catch (e) {
+      print('자석 쿨타임 타이머 dispose 에러: $e');
     }
   }
 

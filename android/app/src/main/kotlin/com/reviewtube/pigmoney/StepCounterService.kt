@@ -40,6 +40,10 @@ class StepCounterService : Service(), SensorEventListener {
         const val MILESTONE_CHANNEL_ID = "step_milestone_channel"
         const val NOTIFICATION_ID = 200
 
+        // 🔒 걸음수 마일스톤 알림 스위치 (기능 삭제 아님 - 다시 켜려면 true로만 변경)
+        // iOS는 work_provider.dart의 _stepMilestoneEnabled와 함께 관리
+        const val STEP_MILESTONE_ENABLED = false
+
         @Volatile
         var isRunning = false
     }
@@ -255,17 +259,8 @@ class StepCounterService : Service(), SensorEventListener {
 
     private fun getNotificationStyledText(steps: Int): CharSequence {
         val formatted = String.format("%,d", steps)
-        val text = when {
-            steps >= 10000 -> "\uD83D\uDC51 ${formatted}걸음\n상자 5개 전부 최대 보상 가능!"
-            steps >= 2000 -> {
-                val boxes = minOf(steps / 2000, 5)
-                "\uD83D\uDC63 ${formatted}걸음\n상자 ${boxes}개 최대 보상 가능"
-            }
-            else -> {
-                val remaining = String.format("%,d", 2000 - steps)
-                "\uD83D\uDC63 현재 ${formatted}걸음\n2,000걸음까지 ${remaining}걸음 남았어요!"
-            }
-        }
+        // 걸음수 구간과 무관하게 항상 걸음수 한 줄만 표시 (보상 안내 문구 제거)
+        val text = "👣 ${formatted}걸음"
         val ssb = SpannableStringBuilder(text)
         val start = text.indexOf(formatted)
         if (start >= 0) {
@@ -335,6 +330,8 @@ class StepCounterService : Service(), SensorEventListener {
     }
 
     private fun checkAndSendMilestoneNotification(steps: Int) {
+        // 🔒 마일스톤 알림 기능이 꺼져있으면 발송하지 않음
+        if (!STEP_MILESTONE_ENABLED) return
         if (!isWorkNotificationEnabled()) return
 
         val milestones = listOf(2000, 4000, 6000, 8000, 10000)

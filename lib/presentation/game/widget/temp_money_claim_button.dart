@@ -18,11 +18,11 @@ class _TempMoneyClaimButtonState extends ConsumerState<TempMoneyClaimButton> {
   void _handleClaim() {
     final tempMoney = ref.read(gameProvider.select((s) => s.tempMoney));
 
-    // 1000 이하면 스낵바 표시하고 수령 불가
-    if (tempMoney < 1000) {
+    // 100 미만이면 스낵바 표시하고 수령 불가
+    if (tempMoney < 100) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('1,000 M 이상 쌓여야 받을 수 있어요'),
+          content: Text('100 M 이상 쌓여야 받을 수 있어요'),
           duration: Duration(seconds: 2),
         ),
       );

@@ -50,6 +50,12 @@ class GameState {
   // 데이터 로드 실패 상태
   final bool hasLoadError;
 
+  // 🧲 자석 버프 관련 상태
+  final int magnetBuffCount; // 보유 중인 자석 버프 개수 (최대 1)
+  final bool isMagnetModeActive; // 자석 모드 활성화 여부
+  final int magnetRemainingSeconds; // 자석 모드 남은 시간 (초)
+  final int magnetCooldownRemainingSeconds; // 자석 쿨타임 남은 시간 (초, 0이면 쿨타임 없음)
+
   final Rect gameArea;
   final Rect piggyBankRect;
   final Rect leftUIRect;
@@ -101,6 +107,12 @@ class GameState {
 
     // 데이터 로드 실패 상태 초기값
     this.hasLoadError = false,
+
+    // 🧲 자석 버프 초기값
+    this.magnetBuffCount = 0,
+    this.isMagnetModeActive = false,
+    this.magnetRemainingSeconds = 0,
+    this.magnetCooldownRemainingSeconds = 0,
 
     this.gameArea = Rect.zero,
     this.piggyBankRect = Rect.zero,
@@ -161,6 +173,12 @@ class GameState {
     // 데이터 로드 실패 상태
     bool? hasLoadError,
 
+    // 🧲 자석 버프 관련 변수
+    int? magnetBuffCount,
+    bool? isMagnetModeActive,
+    int? magnetRemainingSeconds,
+    int? magnetCooldownRemainingSeconds,
+
     Rect? gameArea,
     Rect? piggyBankRect,
     Rect? leftUIRect,
@@ -212,6 +230,12 @@ class GameState {
 
       // 데이터 로드 실패 상태
       hasLoadError: hasLoadError ?? this.hasLoadError,
+
+      // 🧲 자석 버프 관련 변수
+      magnetBuffCount: magnetBuffCount ?? this.magnetBuffCount,
+      isMagnetModeActive: isMagnetModeActive ?? this.isMagnetModeActive,
+      magnetRemainingSeconds: magnetRemainingSeconds ?? this.magnetRemainingSeconds,
+      magnetCooldownRemainingSeconds: magnetCooldownRemainingSeconds ?? this.magnetCooldownRemainingSeconds,
 
       gameArea: gameArea ?? this.gameArea,
       piggyBankRect: piggyBankRect ?? this.piggyBankRect,

@@ -34,8 +34,8 @@ class LuckyBagDisplay extends ConsumerWidget {
     
     return GestureDetector(
       onTap: canClick ? () {
-        // 바닥에 코인 5개 뿌리기
-        ref.read(gameProvider.notifier).dropInitialCoins(5);
+        // 바닥에 코인 10개 뿌리기
+        ref.read(gameProvider.notifier).dropInitialCoins(10);
       } : null,
       behavior: HitTestBehavior.opaque,
       child: luckyBagWidget,

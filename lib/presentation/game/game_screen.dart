@@ -11,6 +11,7 @@ import 'package:pigmoney/presentation/game/widget/collect_coin_text.dart';
 import 'package:pigmoney/presentation/game/widget/floor_coins.dart';
 import 'package:pigmoney/presentation/game/widget/lucky_bag_display.dart';
 import 'package:pigmoney/presentation/game/widget/right_refill.dart';
+import 'package:pigmoney/presentation/game/widget/magnet_buff_button.dart';
 import 'package:pigmoney/presentation/game/widget/temp_money_claim_button.dart';
 import 'package:pigmoney/presentation/game/widget/top_coin_display.dart';
 import 'package:velocity_x/velocity_x.dart';
@@ -426,6 +427,8 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
     final adMultiplier = 2;
     final formattedAmount = NumberFormat('#,###').format(tempMoneyAmount);
     final doubleAmount = NumberFormat('#,###').format(tempMoneyAmount * adMultiplier);
+    // 🧲 지금 광고를 보면 자석이 실제로 지급되는 상태일 때만 아이콘 표시 (표시했는데 안 주는 상황 방지)
+    final willGrantMagnet = ref.read(gameProvider.notifier).willGrantMagnetOnAd;
 
     showDialog(
       context: context,
@@ -495,7 +498,7 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
                           },
                           child: Image.asset('assets/icons/ic_game2_coins.png', width: 100, height: 100),
                         ),
-                        '$doubleAmount M'.text.black.size(20).bold.make(),
+                        '$doubleAmount M${willGrantMagnet ? ' 🧲' : ''}'.text.black.size(20).bold.make(),
                         const SizedBox(height: 10),
                         ElevatedButton(
                           onPressed: () {
@@ -933,6 +936,8 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
               ),
               // ✅ FloorCoinsDisplay를 나중에 그려서 돼지 위에 동전이 오도록 함 (클릭 가능)
               FloorCoinsDisplay(),
+              // 🧲 자석 버프 버튼 (돼지저금통 좌측, FloorCoinsDisplay 이후 배치로 터치 보장)
+              const Positioned(left: 5, bottom: 130, child: MagnetBuffButton()),
               Align(
                 alignment: Alignment.bottomCenter,
                 child: Padding(

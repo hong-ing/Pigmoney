@@ -57,6 +57,10 @@ class WorkNotifier extends StateNotifier<WorkNotifierState> {
   final Set<int> _notifiedMilestones = {};
   static const List<int> _stepMilestones = [2000, 4000, 6000, 8000, 10000];
 
+  // 🔒 걸음수 마일스톤 알림 스위치 (기능 삭제 아님 - 다시 켜려면 true로만 변경)
+  // Android는 StepCounterService.kt의 STEP_MILESTONE_ENABLED와 함께 관리
+  static const bool _stepMilestoneEnabled = false;
+
   // Android: EventChannel for real-time step updates from native service
   static const _stepEventChannel = EventChannel('com.pigmoney/pedometer_steps');
   StreamSubscription? _stepSubscription;
@@ -318,6 +322,8 @@ class WorkNotifier extends StateNotifier<WorkNotifierState> {
 
   /// 걸음수 마일스톤 도달 시 알림 (iOS 전용 - Android는 네이티브 서비스에서 처리)
   void _checkStepMilestones(int steps) {
+    // 🔒 마일스톤 알림 기능이 꺼져있으면 발송하지 않음
+    if (!_stepMilestoneEnabled) return;
     if (!Platform.isIOS) return;
 
     for (final milestone in _stepMilestones) {
