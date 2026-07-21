@@ -154,15 +154,17 @@ class _RightRefillButtonState extends ConsumerState<RightRefillButton> {
               // 코인 지갑 (바운싱 효과 포함)
               coinPurse,
 
-              // 하단 텍스트: 오늘 남은 리필 횟수
-              (refillCount == 0 ? '오늘은 끝!' : '$refillCount/50회').text
-                  .size(13)
-                  .heightTight
-                  .bold
-                  .letterSpacing(-0.2)
-                  .color(displayCoins != 0 ? Colors.white : Colors.grey)
-                  .make()
-                  .pOnly(top: fillSpeedText != null && isFillingCoins ? 5 : 0),
+              // 하단 텍스트: 회차 숫자('N/50회')는 숨김([2]), '오늘은 끝!' 상태 메시지만 유지
+              // (무한 리필 순환으로 refillCount는 0이 되지 않지만, 구버전/예외 대비 메시지는 남겨둠)
+              if (refillCount == 0)
+                '오늘은 끝!'.text
+                    .size(13)
+                    .heightTight
+                    .bold
+                    .letterSpacing(-0.2)
+                    .color(displayCoins != 0 ? Colors.white : Colors.grey)
+                    .make()
+                    .pOnly(top: fillSpeedText != null && isFillingCoins ? 5 : 0),
             ],
           ),
         ).pOnly(right: 20);

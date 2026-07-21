@@ -164,6 +164,13 @@ class GameNotifier extends StateNotifier<GameState> {
   // 리필 50회 시스템: 현재 회차 = 51 - 남은 횟수
   final int _maxRefillCount = 51;
 
+  // [1] 무한 리필 순환 (끄려면 false로만 변경)
+  // 서버 시드(50)는 그대로 두고, 50회차(rewardRefillCount=1) 소진 시 41회차(=10)로 되돌려
+  // 41~60 확률밴드(금2%/은36%/동62%) · 20초당 +1 속도 · 짝수 회차 전면광고를 유지하며
+  // 계속 리필 가능하게 함. rewardRefillCount는 항상 1~50 범위라 서버 상한/리셋과 충돌 없음.
+  static const bool _refillCycleEnabled = true;
+  static const int _refillCycleRestoreCount = 10; // 순환 복귀 지점: round 41 = _maxRefillCount(51) - 10
+
   // ✅ 전면광고 준비 중 플래그 (중복 호출 방지)
   bool _isPreparingCoinAd = false;
 
@@ -177,14 +184,36 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   Coin _generateRandomCoin(Offset position) {
-    int typeRoll = _random.nextInt(100);
+    // [4] 회차별 가변 확률 (1000분율). 회차 = _maxRefillCount - rewardRefillCount
+    // roll < goldMax → 금, roll < silverMax → 은, 그 이상 → 동
+    final int round = _maxRefillCount - state.rewardRefillCount;
+    final int goldMax; // 금 경계 (1000분율)
+    final int silverMax; // 은 경계 (금 다음 구간까지 누적)
+    if (round <= 20) {
+      goldMax = 40; // 금 4%
+      silverMax = 440; // 은 40% (40+400)  → 동 56%
+    } else if (round <= 40) {
+      goldMax = 30; // 금 3%
+      silverMax = 410; // 은 38% (30+380)  → 동 59%
+    } else if (round <= 60) {
+      goldMax = 20; // 금 2%
+      silverMax = 380; // 은 36% (20+360)  → 동 62%
+    } else if (round <= 80) {
+      goldMax = 10; // 금 1%
+      silverMax = 350; // 은 34% (10+340)  → 동 65%
+    } else {
+      goldMax = 5; // 금 0.5%
+      silverMax = 305; // 은 30% (5+300)   → 동 69.5%
+    }
+
+    final int typeRoll = _random.nextInt(1000);
     CoinType type;
     int value;
 
-    if (typeRoll < 4) {
+    if (typeRoll < goldMax) {
       type = CoinType.gold;
       value = 100 + _random.nextInt(900);
-    } else if (typeRoll < 44) {
+    } else if (typeRoll < silverMax) {
       type = CoinType.silver;
       value = 10 + _random.nextInt(90);
     } else {
@@ -2204,7 +2233,7 @@ class GameNotifier extends StateNotifier<GameState> {
   double _calculateFillSpeed(int refillCount) {
     // 현재 회차 = 51 - 남은 횟수 (50/50에서 시작하므로 첫 번째 리필이 1회차)
     // 1회차: 즉시 리필(0), 2회차: 0.2초당 +1, 3회차: 0.5초당 +1,
-    // 4회차부터: (회차-3)초당 +1, 24회차 이후는 전부 20초당 +1
+    // 4회차부터: (회차-3)초당 +1, [3] 23회차(20초) 이후로는 20초당 +1로 상한 고정
     int currentRound = _maxRefillCount - refillCount;
     if (currentRound <= 1) return 0.0; // 즉시 리필
     if (currentRound == 2) return 0.2;
@@ -2709,7 +2738,12 @@ class GameNotifier extends StateNotifier<GameState> {
     }
 
     final currentRefillCount = state.rewardRefillCount;
-    final remainingRefills = currentRefillCount - 1;
+    int remainingRefills = currentRefillCount - 1;
+    // [1] 무한 리필 순환: 50회차 소진(remaining=0) 시 종료 대신 41회차(=10)로 되돌림
+    // → 41~50 회차를 반복하며 금2%/20초/짝수광고 유지. 서버 시드(50)는 미변경.
+    if (_refillCycleEnabled && remainingRefills <= 0) {
+      remainingRefills = _refillCycleRestoreCount;
+    }
     final fillSpeed = _calculateFillSpeed(currentRefillCount);
 
     print('리필 실행: ${coinAmount}개 동전, 남은 횟수: ${remainingRefills}');
