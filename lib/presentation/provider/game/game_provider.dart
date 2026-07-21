@@ -2244,7 +2244,11 @@ class GameNotifier extends StateNotifier<GameState> {
     // 🔔 7회차부터: 충전 완료 예상 시각에 로컬알림 예약 (지갑 가득 참 안내)
     _scheduleCoinPurseFullNotificationIfNeeded(fillSpeed, maxCoins);
 
-    _coinsFillTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    // ⏱️ 틱 주기를 충전 간격에 맞춤: 0.2초당 +1이면 0.2초마다, 0.5초당 +1이면 0.5초마다 틱
+    // (기존 고정 1초 틱은 0.2초 속도에서 '1초당 +5'로 뭉텅뭉텅 올라가 보이는 문제가 있었음)
+    // 총 충전량/시간은 시간 기반 계산이라 동일, 화면 갱신 단위만 +1씩 잘게 쪼개짐
+    final tickMs = (fillSpeed * 1000).clamp(100, 1000).toInt();
+    _coinsFillTimer = Timer.periodic(Duration(milliseconds: tickMs), (timer) {
       if (_isNotifierDisposed || _isDisposed) {
         timer.cancel();
         return;
@@ -2259,14 +2263,15 @@ class GameNotifier extends StateNotifier<GameState> {
       // 🔥 시간 기반 계산: 실제 경과 시간으로 코인 수 계산 (도즈 모드 대응)
       if (_fillStartTime != null) {
         final now = DateTime.now();
-        final elapsedSeconds = now.difference(_fillStartTime!).inSeconds;
-        final expectedCoins = (elapsedSeconds / fillSpeed).floor();
+        // 밀리초 단위 계산: 정수 초 단위로 끊으면 1초 미만 속도(0.2초/0.5초)에서 +1씩 갱신이 안 됨
+        final elapsedMs = now.difference(_fillStartTime!).inMilliseconds;
+        final expectedCoins = (elapsedMs / (fillSpeed * 1000)).floor();
 
         // 최대치 제한
         final actualCoins = expectedCoins > maxCoins ? maxCoins : expectedCoins;
 
         if (actualCoins != state.currentCoins) {
-          print("⚡ 시간기반 코인 업데이트: ${state.currentCoins} → $actualCoins (경과: ${elapsedSeconds}초)");
+          print("⚡ 시간기반 코인 업데이트: ${state.currentCoins} → $actualCoins (경과: ${(elapsedMs / 1000).toStringAsFixed(1)}초)");
           state = state.copyWith(currentCoins: actualCoins);
         }
 
@@ -2280,8 +2285,8 @@ class GameNotifier extends StateNotifier<GameState> {
           SharedPreferences.getInstance().then((prefs) => prefs.setBool('isRightRefillFull', true));
           _updateRefillButtonStates();
           _saveGameStateToPrefs();
-        } else if (timer.tick % 5 == 0) {
-          // 5초마다 중간 저장
+        } else if (timer.tick % max(1, (5000 / tickMs).round()) == 0) {
+          // 약 5초마다 중간 저장 (틱 주기가 잘게 쪼개져도 저장 빈도는 유지)
           _saveGameStateToPrefs();
         }
       } else {

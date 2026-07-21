@@ -332,11 +332,11 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
     }
 
     try {
-      // 튜닝 포인트: 튀어오름(팝업):빨려들어감 = 4:6 비율, 총 1000ms
-      // (동전 도착이 기존 800ms보다 ~200ms 늦어져 폭발음과 타이밍이 맞음)
+      // 튜닝 포인트: 튀어오름(팝업):빨려들어감 = 55:45 비율, 총 1000ms
+      // (팝업을 길게, 빨려들어감을 짧고 강한 가속으로 '쏙' 빨려드는 느낌)
       const int totalDurationMs = 1000;
-      const double popWeight = 40; // 튀어오름(커짐) 구간 비중
-      const double suckWeight = 60; // 빨려들어감(작아짐) 구간 비중
+      const double popWeight = 55; // 튀어오름(커짐) 구간 비중
+      const double suckWeight = 45; // 빨려들어감(작아짐) 구간 비중
 
       final controller = AnimationController(
         duration: const Duration(milliseconds: totalDurationMs),
@@ -365,7 +365,8 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
           weight: popWeight,
         ),
         TweenSequenceItem(
-          tween: Tween<Offset>(begin: popPosition, end: endPosition).chain(CurveTween(curve: Curves.easeIn)),
+          // easeInQuart: 마지막에 급가속하며 '쏙' 빨려드는 느낌
+          tween: Tween<Offset>(begin: popPosition, end: endPosition).chain(CurveTween(curve: Curves.easeInQuart)),
           weight: suckWeight,
         ),
       ]).animate(controller);
@@ -377,7 +378,7 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
           weight: popWeight,
         ),
         TweenSequenceItem(
-          tween: Tween<double>(begin: 1.5, end: 0.6).chain(CurveTween(curve: Curves.easeIn)),
+          tween: Tween<double>(begin: 1.5, end: 0.6).chain(CurveTween(curve: Curves.easeInQuart)),
           weight: suckWeight,
         ),
       ]).animate(controller);

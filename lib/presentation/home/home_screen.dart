@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:audioplayers/audioplayers.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:velocity_x/velocity_x.dart';
 
 import '../../core/ads/admob_service.dart';
+import '../../core/services/snapplay_service.dart';
 import '../../core/utils/korean_time_utils.dart';
 import '../../core/utils/log/logger.dart';
 import '../../core/widgets/sync_loading_overlay.dart';
@@ -19,7 +22,9 @@ import '../provider/attendance_provider.dart';
 import '../provider/auto_earn/auto_earn_provider.dart';
 import '../provider/midnight_reset_provider.dart';
 import '../provider/sync_loading_provider.dart';
+import '../game/widget/animation_bouncing.dart';
 import '../provider/game2/game2_provider.dart';
+import '../provider/settings_provider.dart';
 import '../provider/user_provider.dart';
 import '../provider/work_provider.dart';
 
@@ -55,10 +60,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
   // 출석체크 위젯을 보존하기 위한 변수
   final AttendanceCheckWidget _attendanceCheckWidget = const AttendanceCheckWidget(key: PageStorageKey('attendance_widget'));
 
+  // ✅ 적립탭에서 홈으로 복귀: 스냅플레이 행운룰렛/행운주사위
+  final _soundPlayer = AudioPlayer();
+  final _snapPlayService = SnapPlayService.instance;
+  bool _isClaimingRouletteMoney = false;
+  bool _isClaimingDiceMoney = false;
+
+  // ✅ 오퍼월 중복 오픈 방지 플래그 (룰렛/주사위 공용 - 빠른 연속 터치나
+  // 서로 다른 창을 동시에 여는 것 모두 차단)
+  bool _isShowingSnapPlayOfferwall = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    // ✅ 룰렛/주사위용 스냅플레이 초기화
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeSnapPlay();
+    });
 
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(() {
@@ -241,6 +261,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
       _tabController.dispose();
       _scrollController.dispose();
       _showScrollToTopButton.dispose();
+      _soundPlayer.dispose(); // ✅ 룰렛/주사위 적립 사운드 플레이어 해제
       admobService.disposeNativeAdByKey('home_screen');
     } catch (e) {
       print('HomeScreen dispose 중 오류: $e');
@@ -543,10 +564,392 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
       mainAxisAlignment: MainAxisAlignment.spaceAround,
       children: [
         const AutoEarnPigWidget(),
+        // ✅ 적립탭에서 홈으로 복귀: 행운룰렛/행운주사위 (자동적립과 만보기 사이)
+        _buildRouletteButton(),
+        _buildDiceButton(),
         // 🔒 _showStepCounter = false 인 동안 숨김 (코드는 그대로 유지)
         if (_showStepCounter) _buildWorkButton(),
       ],
     ).pOnly(left: 10);
+  }
+
+  // 스냅플레이 초기화
+  Future<void> _initializeSnapPlay() async {
+    try {
+      final user = ref.read(currentUserProvider);
+      if (user != null) {
+        await _snapPlayService.initialize(user.uid, user.nickname);
+        logger.d('홈: 스냅플레이 초기화 완료');
+      }
+    } catch (e) {
+      logger.e('홈: 스냅플레이 초기화 실패: $e');
+    }
+  }
+
+  // 룰렛 버튼 위젯
+  Widget _buildRouletteButton() {
+    final user = ref.watch(currentUserProvider);
+    final rouletteMoney = user?.snapPlayRouletteMoney ?? 0;
+
+    // 기본 룰렛 위젯 (자동적립 돼지와 동일한 스타일)
+    Widget rouletteWidget = Stack(
+      alignment: Alignment.center,
+      clipBehavior: Clip.none, // 잘림 방지
+      children: [
+        // 룰렛 이미지 (자동적립 돼지와 동일한 크기)
+        Image.asset('assets/icons/ic_roulette.png', width: 80, height: 80).pOnly(bottom: 10),
+
+        // 룰렛 위에 머니 표시
+        if (rouletteMoney > 0) ...{
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+            decoration: BoxDecoration(
+              color: Colors.amber,
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 3,
+                  spreadRadius: 1,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: '${rouletteMoney}M'.text.size(14).black.bold.make(),
+          ).positioned(top: -10),
+        },
+        // 하단 텍스트
+        '행운룰렛'.text.size(13).white.semiBold.letterSpacing(-0.2).make().positioned(bottom: -12),
+      ],
+    );
+
+    // 머니가 있을 때 바운스 애니메이션 추가 (자동적립 돼지와 동일)
+    if (rouletteMoney > 0) {
+      rouletteWidget = AnimatedBouncingWidget(
+        child: rouletteWidget,
+      );
+    }
+
+    return GestureDetector(
+      onTap: _isClaimingRouletteMoney ? null : (rouletteMoney > 0 ? _claimRouletteMoney : _showSnapPlayRoulette),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          rouletteWidget,
+          // 로딩 상태일 때 로딩 인디케이터 표시
+          if (_isClaimingRouletteMoney)
+            Container(
+              width: 68,
+              height: 68,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(color: Colors.amber, strokeWidth: 2),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // 주사위 버튼 위젯
+  Widget _buildDiceButton() {
+    final user = ref.watch(currentUserProvider);
+    final diceMoney = user?.snapPlayDiceMoney ?? 0;
+
+    // 기본 룰렛 위젯 (자동적립 돼지와 동일한 스타일)
+    Widget diceWidget = Stack(
+      alignment: Alignment.center,
+      clipBehavior: Clip.none, // 잘림 방지
+      children: [
+        // 룰렛 이미지 (자동적립 돼지와 동일한 크기)
+        Image.asset('assets/icons/ic_dice.png', width: 80, height: 80).pOnly(bottom: 10),
+
+        // 룰렛 위에 머니 표시
+        if (diceMoney > 0) ...{
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+            decoration: BoxDecoration(
+              color: Colors.amber,
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 3,
+                  spreadRadius: 1,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: '${diceMoney}M'.text.size(14).black.bold.make(),
+          ).positioned(top: -10),
+        },
+        // 하단 텍스트
+        '행운주사위'.text.size(13).white.semiBold.letterSpacing(-0.2).make().positioned(bottom: -12),
+      ],
+    );
+
+    // 머니가 있을 때 바운스 애니메이션 추가 (자동적립 돼지와 동일)
+    if (diceMoney > 0) {
+      diceWidget = AnimatedBouncingWidget(
+        child: diceWidget,
+      );
+    }
+
+    return GestureDetector(
+      onTap: _isClaimingDiceMoney ? null : (diceMoney > 0 ? _claimDiceMoney : _showSnapPlayDice),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          diceWidget,
+          // 로딩 상태일 때 로딩 인디케이터 표시
+          if (_isClaimingDiceMoney)
+            Container(
+              width: 68,
+              height: 68,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(color: Colors.amber, strokeWidth: 2),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // 룰렛 머니 적립
+  Future<void> _claimRouletteMoney() async {
+    // 이미 처리 중이면 중복 실행 방지
+    if (_isClaimingRouletteMoney) return;
+
+    setState(() => _isClaimingRouletteMoney = true);
+
+    try {
+      final user = ref.read(currentUserProvider);
+      if (user == null || user.snapPlayRouletteMoney <= 0) return;
+
+      final earnAmount = user.snapPlayRouletteMoney;
+      logger.d('========== 룰렛 포인트 적립 시작 ==========');
+      logger.d('적립할 포인트: $earnAmount');
+
+      // 사운드 재생
+      final settings = ref.read(settingsProvider);
+      if (settings.isSfxEnabled) {
+        await _soundPlayer.play(AssetSource('audio/pig_deposit_sound.mp3'));
+      }
+
+      // 1. 머니 증가
+      final userRepo = ref.read(userRepositoryProvider);
+      await userRepo.addEarning(amount: earnAmount);
+
+      // 2. snapPlayRouletteMoney 차감
+      final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
+      await userRef.update({
+        'snapPlayRouletteMoney': FieldValue.increment(-earnAmount),
+      });
+
+      // 3. 사용자 데이터 새로고침
+      await ref.read(currentUserProvider.notifier).refreshUserData();
+
+      logger.d('========== 룰렛 포인트 적립 완료 ==========');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${earnAmount}M이 적립되었습니다!'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      logger.e('룰렛 포인트 적립 중 오류: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('적립 중 오류가 발생했습니다 : ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isClaimingRouletteMoney = false);
+      }
+    }
+  }
+
+  // 주사위 머니 적립
+  Future<void> _claimDiceMoney() async {
+    // 이미 처리 중이면 중복 실행 방지
+    if (_isClaimingDiceMoney) return;
+
+    setState(() => _isClaimingDiceMoney = true);
+
+    try {
+      final user = ref.read(currentUserProvider);
+      if (user == null || user.snapPlayDiceMoney <= 0) return;
+
+      final earnAmount = user.snapPlayDiceMoney;
+      logger.d('========== 주사위 포인트 적립 시작 ==========');
+      logger.d('적립할 포인트: $earnAmount');
+
+      // 사운드 재생
+      final settings = ref.read(settingsProvider);
+      if (settings.isSfxEnabled) {
+        await _soundPlayer.play(AssetSource('audio/pig_deposit_sound.mp3'));
+      }
+
+      // 1. 머니 증가
+      final userRepo = ref.read(userRepositoryProvider);
+      await userRepo.addEarning(amount: earnAmount);
+
+      // 2. snapPlayDiceMoney 차감
+      final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
+      await userRef.update({
+        'snapPlayDiceMoney': FieldValue.increment(-earnAmount),
+      });
+
+      // 3. 사용자 데이터 새로고침
+      await ref.read(currentUserProvider.notifier).refreshUserData();
+
+      logger.d('========== 주사위 포인트 적립 완료 ==========');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${earnAmount}M이 적립되었습니다!'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      logger.e('주사위 포인트 적립 중 오류: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('적립 중 오류가 발생했습니다 : ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isClaimingDiceMoney = false);
+      }
+    }
+  }
+
+  // 스냅플레이 룰렛 오퍼월 표시
+  Future<void> _showSnapPlayRoulette() async {
+    // ✅ 이미 열려있거나 여는 중이면 무시 (빠른 연속 터치로 창이 두 개 열리는 문제 방지)
+    if (_isShowingSnapPlayOfferwall) return;
+    _isShowingSnapPlayOfferwall = true;
+
+    try {
+      final user = ref.read(currentUserProvider);
+      if (user == null) {
+        logger.e('사용자 정보 없음 - 룰렛 표시 불가');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('로그인이 필요합니다.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      // 스냅플레이 초기화 확인
+      if (!_snapPlayService.isInitialized || _snapPlayService.currentUserId != user.uid) {
+        logger.d('스냅플레이 재초기화 필요');
+        final success = await _snapPlayService.initialize(user.uid, user.nickname);
+        if (!success) {
+          throw Exception('스냅플레이 초기화 실패');
+        }
+      }
+
+      logger.d('스냅플레이 룰렛 오퍼월 표시');
+      await _snapPlayService.showRouletteOfferwall();
+    } catch (e) {
+      logger.e('스냅플레이 룰렛 표시 중 오류: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('룰렛을 불러올 수 없습니다: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      // ✅ 창이 닫힌 뒤(또는 오류/조기 return 시) 잠깐의 여유를 두고 잠금 해제
+      await Future.delayed(const Duration(milliseconds: 500));
+      _isShowingSnapPlayOfferwall = false;
+    }
+  }
+
+  // 스냅플레이 주사위 오퍼월 표시
+  Future<void> _showSnapPlayDice() async {
+    // ✅ 이미 열려있거나 여는 중이면 무시 (빠른 연속 터치로 창이 두 개 열리는 문제 방지)
+    if (_isShowingSnapPlayOfferwall) return;
+    _isShowingSnapPlayOfferwall = true;
+
+    try {
+      final user = ref.read(currentUserProvider);
+      if (user == null) {
+        logger.e('사용자 정보 없음 - 주사위 표시 불가');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('로그인이 필요합니다.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
+      // 스냅플레이 초기화 확인
+      if (!_snapPlayService.isInitialized || _snapPlayService.currentUserId != user.uid) {
+        logger.d('스냅플레이 재초기화 필요');
+        final success = await _snapPlayService.initialize(user.uid, user.nickname);
+        if (!success) {
+          throw Exception('스냅플레이 초기화 실패');
+        }
+      }
+
+      logger.d('스냅플레이 주사위 오퍼월 표시');
+      await _snapPlayService.showDiceOfferwall();
+    } catch (e) {
+      logger.e('스냅플레이 주사위 표시 중 오류: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('주사위를 불러올 수 없습니다: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      // ✅ 창이 닫힌 뒤(또는 오류/조기 return 시) 잠깐의 여유를 두고 잠금 해제
+      await Future.delayed(const Duration(milliseconds: 500));
+      _isShowingSnapPlayOfferwall = false;
+    }
   }
 
   // 만보기 버튼 위젯
