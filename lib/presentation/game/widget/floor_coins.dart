@@ -56,7 +56,14 @@ class FloorCoinsDisplay extends ConsumerWidget {
                               ]
                             : null,
                       ),
-                      child: Image.asset(coin.imagePath, width: coin.size, height: coin.size),
+                      // 💣 폭탄 연출용 크기/회전 애니메이션이 있으면 적용
+                      child: Transform.scale(
+                        scale: coin.scaleAnimation?.value ?? 1.0,
+                        child: Transform.rotate(
+                          angle: coin.rotationAnimation?.value ?? 0.0,
+                          child: Image.asset(coin.imagePath, width: coin.size, height: coin.size),
+                        ),
+                      ),
                     ),
                   ),
                 ),

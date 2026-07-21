@@ -56,6 +56,9 @@ class GameState {
   final int magnetRemainingSeconds; // 자석 모드 남은 시간 (초)
   final int magnetCooldownRemainingSeconds; // 자석 쿨타임 남은 시간 (초, 0이면 쿨타임 없음)
 
+  // 💣 폭탄 버프 관련 상태
+  final int bombGaugeRemaining; // 폭탄 게이지 (100에서 시작, 동전 적립마다 -1, 0이면 발동 가능)
+
   final Rect gameArea;
   final Rect piggyBankRect;
   final Rect leftUIRect;
@@ -113,6 +116,9 @@ class GameState {
     this.isMagnetModeActive = false,
     this.magnetRemainingSeconds = 0,
     this.magnetCooldownRemainingSeconds = 0,
+
+    // 💣 폭탄 버프 초기값
+    this.bombGaugeRemaining = 100,
 
     this.gameArea = Rect.zero,
     this.piggyBankRect = Rect.zero,
@@ -179,6 +185,9 @@ class GameState {
     int? magnetRemainingSeconds,
     int? magnetCooldownRemainingSeconds,
 
+    // 💣 폭탄 버프 관련 변수
+    int? bombGaugeRemaining,
+
     Rect? gameArea,
     Rect? piggyBankRect,
     Rect? leftUIRect,
@@ -236,6 +245,9 @@ class GameState {
       isMagnetModeActive: isMagnetModeActive ?? this.isMagnetModeActive,
       magnetRemainingSeconds: magnetRemainingSeconds ?? this.magnetRemainingSeconds,
       magnetCooldownRemainingSeconds: magnetCooldownRemainingSeconds ?? this.magnetCooldownRemainingSeconds,
+
+      // 💣 폭탄 버프 관련 변수
+      bombGaugeRemaining: bombGaugeRemaining ?? this.bombGaugeRemaining,
 
       gameArea: gameArea ?? this.gameArea,
       piggyBankRect: piggyBankRect ?? this.piggyBankRect,

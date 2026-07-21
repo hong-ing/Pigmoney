@@ -55,6 +55,13 @@ class GameNotifier extends StateNotifier<GameState> {
   Timer? _magnetModeTimer;
   Timer? _magnetCooldownTimer;
 
+  // 💣 폭탄 버프 기능 스위치 (끄려면 false로만 변경, 버튼 표시 여부도 함께 제어됨)
+  static const bool bombBuffEnabled = true;
+  static const int _bombGaugeMax = 100; // 게이지 최대값 (동전 100개 적립 시 발동 가능)
+  static const String _bombGaugeKey = 'bombGaugeRemaining';
+  // 폭탄으로 쓸어담은 동전 id (게이지 감소 제외용)
+  final Set<String> _bombSweptCoinIds = {};
+
   // 🪙 바닥에 항상 유지되는 동전 개수
   static const int _maxFloorCoins = 10;
 
@@ -70,9 +77,16 @@ class GameNotifier extends StateNotifier<GameState> {
   final AudioPlayer _pigTouchSoundPlayer = AudioPlayer();
   bool _isRefillSoundPlaying = false;
 
+  // 💣 폭발음 재생용 AudioPlayer
+  final AudioPlayer _bombExplosionPlayer = AudioPlayer();
+  // 🧲 자석 모드 반복 사운드용 AudioPlayer (활성화 동안 loop 재생)
+  final AudioPlayer _magnetLoopPlayer = AudioPlayer();
+
   // 콜백 함수 정의
   Function(Coin)? onStartCoinAnimation;
   Function(Coin)? onStartDropAnimation; // 낙하 애니메이션용
+  Function(Coin)? onStartBombScatterAnimation; // 💣 폭탄 흩뿌림→수집 애니메이션용
+  Function()? onBombFlash; // 💣 폭탄 발동 시 화면 플래시용
 
   // 리필 관련 콜백 함수 추가
   Function(int count, Future<bool> Function(int) callback)? onShowRefillConfirm;
@@ -158,6 +172,8 @@ class GameNotifier extends StateNotifier<GameState> {
     _initialize();
     _setupConnectivityListener();
     _loadMagnetBuffState(); // 🧲 자석 버프 보유/쿨타임 상태 복원
+    _loadBombBuffState(); // 💣 폭탄 게이지 상태 복원
+    _preloadBombExplosionSound(); // 💣 폭발음 미리 로드 (재생 지연 방지)
   }
 
   Coin _generateRandomCoin(Offset position) {
@@ -485,7 +501,9 @@ class GameNotifier extends StateNotifier<GameState> {
     );
   }
 
-  /// 🧲 앱 시작 시 자석 버프 보유/쿨타임 상태 복원
+  /// 🧲 앱 시작 시 자석 버프 보유/발동/쿨타임 상태 복원
+  /// - 발동 종료 시각(발동 시작+30초)이 아직 미래면: 남은 시간만큼 자석 모드 재개
+  /// - 이미 지났으면: 그 시각 기준으로 남은 쿨타임 계산
   Future<void> _loadMagnetBuffState() async {
     if (!magnetBuffEnabled) return;
 
@@ -496,10 +514,26 @@ class GameNotifier extends StateNotifier<GameState> {
       // 보유 상태 복원 (최대 1개)
       final owned = prefs.getBool(_magnetBuffOwnedKey) ?? false;
 
-      // 마지막 발동 종료 시각 기준으로 남은 쿨타임 계산
       final lastEndMillis = prefs.getInt(_magnetLastEndTimeKey) ?? 0;
-      final elapsedSeconds = (DateTime.now().millisecondsSinceEpoch - lastEndMillis) ~/ 1000;
-      final cooldownRemaining = max(0, _magnetCooldownSeconds - elapsedSeconds);
+      final nowMillis = DateTime.now().millisecondsSinceEpoch;
+
+      if (lastEndMillis > nowMillis) {
+        // 🔁 자석 발동(30초) 도중에 나갔다 돌아온 경우: 남은 시간만큼 이어서 재개
+        final remainingActive = ((lastEndMillis - nowMillis) / 1000).ceil().clamp(1, _magnetModeDurationSeconds);
+        state = state.copyWith(
+          magnetBuffCount: owned ? 1 : 0,
+          isMagnetModeActive: true,
+          magnetRemainingSeconds: remainingActive,
+        );
+        _startMagnetModeTimer();
+        _startMagnetLoopSound(); // 지지직 사운드도 재개
+        print('🧲 자석 모드 재개: 남은 시간 $remainingActive초');
+        return;
+      }
+
+      // 종료 시각 기준으로 남은 쿨타임 계산
+      final elapsedSeconds = (nowMillis - lastEndMillis) ~/ 1000;
+      final cooldownRemaining = (_magnetCooldownSeconds - elapsedSeconds).clamp(0, _magnetCooldownSeconds);
 
       state = state.copyWith(
         magnetBuffCount: owned ? 1 : 0,
@@ -528,6 +562,8 @@ class GameNotifier extends StateNotifier<GameState> {
   /// 🧲 자석 버프 지급 (리워드 광고 시청 성공 시 호출)
   /// - 이미 보유 중이면 지급하지 않음 (최대 1개, 누적 불가)
   /// - 쿨타임(마지막 발동 종료 후 10분) 진행 중에는 지급하지 않음
+  /// - 쿨타임 판정은 상태값이 아니라 SharedPreferences의 종료 시각 기준 (화면 이탈/재진입으로
+  ///   상태가 초기화되어도 우회 불가)
   Future<void> _grantMagnetBuffIfEligible() async {
     if (!magnetBuffEnabled) return;
     if (_isDisposed || _isNotifierDisposed) return;
@@ -535,19 +571,32 @@ class GameNotifier extends StateNotifier<GameState> {
       print('🧲 이미 자석 보유 중 - 지급 생략');
       return;
     }
-    if (state.magnetCooldownRemainingSeconds > 0) {
-      print('🧲 쿨타임 진행 중(${state.magnetCooldownRemainingSeconds}초 남음) - 지급 생략');
-      return;
-    }
 
-    state = state.copyWith(magnetBuffCount: 1);
-    await _saveMagnetBuffOwned(true);
-    print('🧲 자석 버프 지급!');
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastEndMillis = prefs.getInt(_magnetLastEndTimeKey) ?? 0;
+      final elapsedSeconds = (DateTime.now().millisecondsSinceEpoch - lastEndMillis) ~/ 1000;
+      if (elapsedSeconds < _magnetCooldownSeconds) {
+        print('🧲 쿨타임 진행 중(${_magnetCooldownSeconds - elapsedSeconds}초 남음) - 지급 생략');
+        return;
+      }
+      if (_isDisposed || _isNotifierDisposed) return;
+
+      state = state.copyWith(magnetBuffCount: 1);
+      await _saveMagnetBuffOwned(true);
+      print('🧲 자석 버프 지급!');
+    } catch (e) {
+      print('🧲 자석 버프 지급 에러: $e');
+    }
   }
 
   /// 🧲 지금 광고를 보면 자석이 실제로 지급되는 상태인지 (2배 수집 다이얼로그 아이콘 표시용)
+  /// 발동 중에는 지급 판정(종료 시각이 미래 → 쿨타임 취급)과 일치하도록 표시하지 않음
   bool get willGrantMagnetOnAd =>
-      magnetBuffEnabled && state.magnetBuffCount == 0 && state.magnetCooldownRemainingSeconds == 0;
+      magnetBuffEnabled &&
+      state.magnetBuffCount == 0 &&
+      state.magnetCooldownRemainingSeconds == 0 &&
+      !state.isMagnetModeActive;
 
   /// 🧲 자석 버프 발동 - 30초간 자석 모드 활성화
   void activateMagnetBuff() {
@@ -564,6 +613,25 @@ class GameNotifier extends StateNotifier<GameState> {
     );
     _saveMagnetBuffOwned(false);
 
+    // 🔒 악용 방지: 발동하는 순간 '예상 종료 시각(지금+30초)'을 미리 저장해둠.
+    // 화면 이탈·강제 종료 등 어떤 이유로 30초가 중단되어도 쿨타임이 반드시 시작되도록 보장.
+    // 정상 종료 시에는 _deactivateMagnetMode()가 실제 종료 시각으로 덮어씀.
+    SharedPreferences.getInstance().then(
+      (prefs) => prefs.setInt(
+        _magnetLastEndTimeKey,
+        DateTime.now().millisecondsSinceEpoch + _magnetModeDurationSeconds * 1000,
+      ),
+    );
+
+    _startMagnetModeTimer();
+
+    // 🔊 자석 모드 동안 지지직 사운드 반복 재생
+    _startMagnetLoopSound();
+    print('🧲 자석 모드 발동! (${_magnetModeDurationSeconds}초)');
+  }
+
+  /// 🧲 자석 모드 1초 카운트다운 타이머 (발동/재개 공용)
+  void _startMagnetModeTimer() {
     _magnetModeTimer?.cancel();
     _magnetModeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_isDisposed || _isNotifierDisposed) {
@@ -577,13 +645,13 @@ class GameNotifier extends StateNotifier<GameState> {
         state = state.copyWith(magnetRemainingSeconds: remaining);
       }
     });
-    print('🧲 자석 모드 발동! (${_magnetModeDurationSeconds}초)');
   }
 
   /// 🧲 자석 모드 해제 - 종료 시점부터 10분 쿨타임 시작 (종료 시각은 로컬 저장)
   void _deactivateMagnetMode() {
     _magnetModeTimer?.cancel();
     _magnetModeTimer = null;
+    _stopMagnetLoopSound(); // 🔊 자석 사운드 반드시 중지
     if (_isDisposed || _isNotifierDisposed) return;
 
     state = state.copyWith(
@@ -617,6 +685,111 @@ class GameNotifier extends StateNotifier<GameState> {
         state = state.copyWith(magnetCooldownRemainingSeconds: remaining);
       }
     });
+  }
+
+  /// 💣 앱 시작 시 폭탄 게이지 상태 복원
+  Future<void> _loadBombBuffState() async {
+    if (!bombBuffEnabled) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_isDisposed || _isNotifierDisposed) return;
+
+      final gauge = prefs.getInt(_bombGaugeKey) ?? _bombGaugeMax;
+      state = state.copyWith(bombGaugeRemaining: gauge.clamp(0, _bombGaugeMax));
+      print('💣 폭탄 게이지 복원: $gauge');
+    } catch (e) {
+      print('💣 폭탄 게이지 복원 에러: $e');
+    }
+  }
+
+  /// 💣 폭탄 버프 발동 - 바닥 동전 전부 한 번에 수집, 게이지 100으로 리셋
+  void activateBombBuff() {
+    if (!bombBuffEnabled) return;
+    if (_isDisposed || _isNotifierDisposed) return;
+    if (state.bombGaugeRemaining > 0) return; // 게이지가 다 차지 않으면 발동 불가
+
+    // 이미 수집 중이 아닌 바닥 동전 전부 대상
+    final coinsToSweep = state.floorCoins
+        .where((c) => !state.selectedCoinIds.contains(c.id) && c.animationState != CoinAnimationState.collecting)
+        .toList();
+    if (coinsToSweep.isEmpty) return; // 쓸어담을 동전이 없으면 게이지 소모하지 않음
+
+    // 게이지 먼저 100으로 리셋 + 쓸어담는 동전은 게이지 감소에서 제외되도록 표시
+    final updatedSelectedIds = Set<String>.from(state.selectedCoinIds);
+    for (final coin in coinsToSweep) {
+      _bombSweptCoinIds.add(coin.id);
+      updatedSelectedIds.add(coin.id);
+    }
+    state = state.copyWith(
+      bombGaugeRemaining: _bombGaugeMax,
+      selectedCoinIds: updatedSelectedIds,
+    );
+
+    // 💥 발동 연출: 폭발음을 가장 먼저 (흩뿌림 시작과 동시에 터지도록), 이어서 화면 플래시
+    _playBombExplosionSound();
+    onBombFlash?.call();
+
+    // 전부 저금통으로 발사 (흩뿌림 연출이 연결되어 있으면 사용, 없으면 기본 수집 애니메이션)
+    // 적립은 기존 handleAnimationEnd 경로 재사용
+    for (final coin in coinsToSweep) {
+      if (onStartBombScatterAnimation != null) {
+        onStartBombScatterAnimation!.call(coin);
+      } else {
+        onStartCoinAnimation?.call(coin);
+      }
+    }
+
+    _saveGameStateToPrefs();
+    print('💣 폭탄 발동! ${coinsToSweep.length}개 동전 수집, 게이지 리셋');
+  }
+
+  /// 💣 폭발음 미리 로드 - 발동 순간 지연 없이 바로 터지도록
+  /// (play() 시점에 파일을 로드하면 첫 재생이 한 박자 늦음)
+  void _preloadBombExplosionSound() async {
+    if (!bombBuffEnabled) return;
+    try {
+      await _bombExplosionPlayer.setPlayerMode(PlayerMode.lowLatency); // 짧은 효과음용 저지연 모드
+      await _bombExplosionPlayer.setReleaseMode(ReleaseMode.stop); // 재생 후에도 소스 유지 (재사용)
+      await _bombExplosionPlayer.setSource(AssetSource('audio/bomb_explosion.mp3'));
+    } catch (e) {
+      print('💣 폭발음 프리로드 오류: $e');
+    }
+  }
+
+  /// 💣 폭발음 재생 (프리로드된 소스를 즉시 재생)
+  void _playBombExplosionSound() async {
+    try {
+      final settings = _ref.read(settingsProvider);
+      if (!settings.isSfxEnabled) return;
+      await _bombExplosionPlayer.stop(); // 처음부터 재생되도록 리셋
+      await _bombExplosionPlayer.resume();
+    } catch (e) {
+      print('💣 폭발음 재생 오류: $e');
+    }
+  }
+
+  /// 🧲 자석 모드 반복 사운드 시작 (지지직 소리 loop)
+  void _startMagnetLoopSound() async {
+    try {
+      final settings = _ref.read(settingsProvider);
+      if (!settings.isSfxEnabled) return;
+      await _magnetLoopPlayer.setReleaseMode(ReleaseMode.loop);
+      await _magnetLoopPlayer.play(AssetSource('audio/magnet.mp3'));
+    } catch (e) {
+      print('🧲 자석 사운드 재생 오류: $e');
+    }
+  }
+
+  /// 🧲 자석 모드 반복 사운드 중지
+  void _stopMagnetLoopSound() {
+    try {
+      if (_magnetLoopPlayer.state != PlayerState.disposed) {
+        _magnetLoopPlayer.stop();
+      }
+    } catch (e) {
+      print('🧲 자석 사운드 중지 오류: $e');
+    }
   }
 
   /// 🧲 터치한 동전과 가장 가까운 바닥 동전 찾기 (자석 모드용)
@@ -1304,6 +1477,8 @@ class GameNotifier extends StateNotifier<GameState> {
       await prefs.setBool('didInitCoins', state.didInitCoins);
       // ✅ 로컬 tempMoney 저장
       await prefs.setInt('tempMoney', state.tempMoney);
+      // 💣 폭탄 게이지 저장
+      await prefs.setInt(_bombGaugeKey, state.bombGaugeRemaining);
       if (state.fillSpeedText != null) {
         await prefs.setString('fillSpeedText', state.fillSpeedText!);
       } else {
@@ -1487,8 +1662,8 @@ class GameNotifier extends StateNotifier<GameState> {
       return false;
     }
 
-    // 기존 코인들과 너무 가깝지 않은지 체크 (살짝 겹치는 정도는 허용)
-    const double minDistance = coinSize * 0.45; // 45% 거리 유지
+    // 기존 코인들과 너무 가깝지 않은지 체크 (많이 겹쳐도 됨, 완전히 포개지는 것만 방지)
+    const double minDistance = coinSize * 0.22; // 22% 거리 유지
     for (final existingCoin in existingCoins) {
       final distance = (pos - existingCoin.position).distance;
       if (distance < minDistance) {
@@ -1561,11 +1736,19 @@ class GameNotifier extends StateNotifier<GameState> {
       final updatedCoins = state.floorCoins.where((c) => c.id != collectedCoin.id).toList();
       final updatedSelectedIds = Set<String>.from(state.selectedCoinIds)..remove(collectedCoin.id);
 
+      // 💣 폭탄 게이지 감소 - 저금통에 들어간 동전마다 -1 (자석으로 딸려온 동전 포함)
+      // 단, 폭탄으로 쓸어담은 동전은 제외 (발동 시 게이지가 100으로 리셋되므로)
+      int newBombGauge = state.bombGaugeRemaining;
+      if (bombBuffEnabled && !_bombSweptCoinIds.remove(collectedCoin.id)) {
+        newBombGauge = max(0, newBombGauge - 1);
+      }
+
       state = state.copyWith(
         tempMoney: newTempMoney, // ✅ 로컬 임시 머니 증가
         // totalCash는 변경하지 않음 (서버 동기화 시에만 변경)
         floorCoins: updatedCoins,
         selectedCoinIds: updatedSelectedIds,
+        bombGaugeRemaining: newBombGauge,
       );
 
       // 2. 바닥에 코인이 _maxFloorCoins개 미만이고 주머니에 코인이 있으면 추가 드롭
@@ -1790,6 +1973,7 @@ class GameNotifier extends StateNotifier<GameState> {
     // 이 메서드를 호출하므로, 활성 게임 기준으로 제어해야 game2에서 game1을 건드리지 않음.
     if (!_isDisposed) {
       bgmService.pauseActive();
+      _stopMagnetLoopSound(); // 🧲 백그라운드/광고 중에는 지지직 사운드도 중지
     }
   }
 
@@ -1797,6 +1981,10 @@ class GameNotifier extends StateNotifier<GameState> {
     // 활성 게임 BGM만 재개(isBgmEnabled는 bgmService가 캐시로 체크).
     if (!_isDisposed) {
       bgmService.resumeActive();
+      // 🧲 자석 모드가 아직 활성 상태면 지지직 사운드 재개
+      if (state.isMagnetModeActive) {
+        _startMagnetLoopSound();
+      }
     }
   }
 
@@ -1875,6 +2063,22 @@ class GameNotifier extends StateNotifier<GameState> {
     } catch (e) {
       print('pigTouchSoundPlayer dispose 에러: $e');
     }
+    try {
+      if (_bombExplosionPlayer.state != PlayerState.disposed) {
+        _bombExplosionPlayer.stop();
+        _bombExplosionPlayer.dispose();
+      }
+    } catch (e) {
+      print('bombExplosionPlayer dispose 에러: $e');
+    }
+    try {
+      if (_magnetLoopPlayer.state != PlayerState.disposed) {
+        _magnetLoopPlayer.stop();
+        _magnetLoopPlayer.dispose();
+      }
+    } catch (e) {
+      print('magnetLoopPlayer dispose 에러: $e');
+    }
     for (var player in _audioPlayerPool) {
       try {
         if (player.state != PlayerState.disposed) {
@@ -1891,6 +2095,10 @@ class GameNotifier extends StateNotifier<GameState> {
   @override
   void dispose() {
     print('💾 GameNotifier 종료 - 최종 데이터 저장 시작');
+
+    // 🧲 자석 발동 중 화면 이탈 시: 별도 기록 불필요.
+    // 발동 시점에 저장한 종료 시각(시작+30초)이 그대로 유지되어, 재진입 시 남은 시간만큼
+    // 자석이 재개되고(_loadMagnetBuffState) 쿨타임도 그 종료 시각 기준으로 돌아 악용 불가.
 
     // 1) 먼저 dispose 플래그 설정 (모든 비동기 작업 중단을 위해)
     _isNotifierDisposed = true;

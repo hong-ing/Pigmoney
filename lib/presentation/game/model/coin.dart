@@ -11,6 +11,8 @@ class Coin {
   Offset position;
   final double size = 77.0;
   Animation<Offset>? animation;
+  Animation<double>? rotationAnimation; // 💣 폭탄 연출용 회전 애니메이션 (평소엔 null)
+  Animation<double>? scaleAnimation; // 💣 폭탄 연출용 크기 애니메이션 (평소엔 null = 1.0배)
   CoinAnimationState animationState;
   AnimationController? controller;
 

@@ -230,8 +230,8 @@ class CoinAdPreparationDialogContentState extends State<CoinAdPreparationDialogC
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 돼지 아이콘
-              Image.asset('assets/icons/ic_pig_level_3.png', width: 80, height: 80),
+              // 빨간 지갑 아이콘 (리필 지갑과 동일 이미지)
+              Image.asset('assets/icons/ic_refill_on.png', width: 80, height: 80),
               const SizedBox(height: 20),
               // 안내 메시지 (시간에 따라 변경)
               AnimatedBuilder(
@@ -314,8 +314,8 @@ class RefillCancelledDialog extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 아이콘
-              Image.asset(imagePath ?? 'assets/icons/ic_pig_level_3.png', width: 80, height: 80),
+              // 아이콘 (기본: 빨간 지갑, 리필 지갑과 동일 이미지)
+              Image.asset(imagePath ?? 'assets/icons/ic_refill_on.png', width: 80, height: 80),
               const SizedBox(height: 20),
               // 안내 메시지
               Text(

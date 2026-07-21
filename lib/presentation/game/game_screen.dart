@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import 'package:pigmoney/presentation/game/widget/collect_coin_text.dart';
 import 'package:pigmoney/presentation/game/widget/floor_coins.dart';
 import 'package:pigmoney/presentation/game/widget/lucky_bag_display.dart';
 import 'package:pigmoney/presentation/game/widget/right_refill.dart';
+import 'package:pigmoney/presentation/game/widget/bomb_buff_button.dart';
 import 'package:pigmoney/presentation/game/widget/magnet_buff_button.dart';
 import 'package:pigmoney/presentation/game/widget/temp_money_claim_button.dart';
 import 'package:pigmoney/presentation/game/widget/top_coin_display.dart';
@@ -79,6 +81,9 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
     final notifier = ref.read(gameProvider.notifier);
     notifier.onStartCoinAnimation = _startCoinCollectAnimation;
     notifier.onStartDropAnimation = _startCoinDropAnimation;
+    // 💣 폭탄 발동 연출 콜백
+    notifier.onStartBombScatterAnimation = _startBombScatterAnimation;
+    notifier.onBombFlash = _triggerBombFlash;
 
     // 리필 확인 다이얼로그 콜백 설정
     notifier.onShowRefillConfirm = _showRefillConfirmDialog;
@@ -299,6 +304,102 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
       controller.forward();
     } catch (e) {
       print('_startCoinDropAnimation 에러: $e');
+    }
+  }
+
+  // 💣 폭탄 발동 시 화면 플래시 효과용 (0.0 = 안 보임)
+  final ValueNotifier<double> _bombFlashOpacity = ValueNotifier(0.0);
+  final Random _bombRandom = Random();
+
+  // 💣 화면 전체가 순간적으로 확 하얗게 찼다가 터지듯 사라지는 플래시
+  // (켜질 때는 즉시 100% 밝기, 130ms 유지 후 350ms 페이드아웃 - 총 0.5초 이내)
+  void _triggerBombFlash() {
+    if (!mounted) return;
+    _bombFlashOpacity.value = 1.0;
+    Future.delayed(const Duration(milliseconds: 130), () {
+      if (mounted) _bombFlashOpacity.value = 0.0;
+    });
+  }
+
+  // 💣 폭탄 수집 애니메이션: 제자리에서 위로 튀어오르며 1.5배로 커졌다가(3D 팝업),
+  // 다시 작아지면서 저금통으로 빨려들어감
+  void _startBombScatterAnimation(Coin coin) {
+    if (!mounted) return;
+
+    // ✅ 이미 애니메이션이 진행 중인 코인은 무시 (중복 방지)
+    if (coin.controller != null && coin.controller!.isAnimating) {
+      return;
+    }
+
+    try {
+      // 튜닝 포인트: 튀어오름(팝업):빨려들어감 = 4:6 비율, 총 1000ms
+      // (동전 도착이 기존 800ms보다 ~200ms 늦어져 폭발음과 타이밍이 맞음)
+      const int totalDurationMs = 1000;
+      const double popWeight = 40; // 튀어오름(커짐) 구간 비중
+      const double suckWeight = 60; // 빨려들어감(작아짐) 구간 비중
+
+      final controller = AnimationController(
+        duration: const Duration(milliseconds: totalDurationMs),
+        vsync: this,
+      );
+      coin.controller = controller;
+
+      final RenderBox? stackBox = _gameAreaKey.currentContext?.findRenderObject() as RenderBox?;
+      final RenderBox? piggyBox = _piggyBankKey.currentContext?.findRenderObject() as RenderBox?;
+      if (stackBox == null || piggyBox == null) return;
+
+      final piggyPositionInStack = stackBox.globalToLocal(piggyBox.localToGlobal(Offset.zero));
+      final piggyCenter = piggyPositionInStack + Offset(piggyBox.size.width / 2, piggyBox.size.height / 3);
+      final startPosition = coin.position;
+      final endPosition = Offset(piggyCenter.dx - coin.size / 2, piggyCenter.dy - coin.size / 2);
+
+      // 1. 팝업 지점: 제자리에서 위로 30~50px 떠오름 (좌우로는 살짝만 흔들려 생동감)
+      final popLift = 30 + _bombRandom.nextDouble() * 20;
+      final popJitterX = (_bombRandom.nextDouble() - 0.5) * 24;
+      final popPosition = startPosition + Offset(popJitterX, -popLift);
+
+      // 2. 위치: 튀어오름 → 저금통 빨려들어감 2단계 시퀀스
+      coin.animation = TweenSequence<Offset>([
+        TweenSequenceItem(
+          tween: Tween<Offset>(begin: startPosition, end: popPosition).chain(CurveTween(curve: Curves.easeOut)),
+          weight: popWeight,
+        ),
+        TweenSequenceItem(
+          tween: Tween<Offset>(begin: popPosition, end: endPosition).chain(CurveTween(curve: Curves.easeIn)),
+          weight: suckWeight,
+        ),
+      ]).animate(controller);
+
+      // 3. 크기: 1.0 → 1.5배로 커졌다가(이용자 쪽으로 튀어나오는 3D 착시) → 0.6배로 줄며 빨려들어감
+      coin.scaleAnimation = TweenSequence<double>([
+        TweenSequenceItem(
+          tween: Tween<double>(begin: 1.0, end: 1.5).chain(CurveTween(curve: Curves.easeOut)),
+          weight: popWeight,
+        ),
+        TweenSequenceItem(
+          tween: Tween<double>(begin: 1.5, end: 0.6).chain(CurveTween(curve: Curves.easeIn)),
+          weight: suckWeight,
+        ),
+      ]).animate(controller);
+
+      // 4. 팽글팽글 회전 (랜덤 방향으로 2~3바퀴, 전체 구간)
+      final totalTurns = (2 + _bombRandom.nextDouble()) * 2 * pi * (_bombRandom.nextBool() ? 1 : -1);
+      coin.rotationAnimation = Tween<double>(begin: 0, end: totalTurns).animate(controller);
+
+      // 5. 애니메이션이 끝나면 Notifier에 알리고 컨트롤러를 dispose (기존 수집 경로와 동일)
+      coin.animation!.addStatusListener((status) {
+        if (status == AnimationStatus.completed && mounted) {
+          ref.read(gameProvider.notifier).handleAnimationEnd(coin);
+          coin.dispose();
+        }
+      });
+
+      // 6. 'collecting' 상태로 전환 (개별 수집음/진동은 생략 - 폭발음이 대신함)
+      coin.animationState = CoinAnimationState.collecting;
+
+      controller.forward();
+    } catch (e) {
+      print('_startBombScatterAnimation 에러: $e');
     }
   }
 
@@ -673,6 +774,8 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
       print('GameScreen dispose 중 에러 발생: $e');
     }
 
+    _bombFlashOpacity.dispose();
+
     super.dispose();
   }
 
@@ -938,6 +1041,8 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
               FloorCoinsDisplay(),
               // 🧲 자석 버프 버튼 (돼지저금통 좌측, FloorCoinsDisplay 이후 배치로 터치 보장)
               const Positioned(left: 5, bottom: 130, child: MagnetBuffButton()),
+              // 💣 폭탄 버프 버튼 (돼지저금통 우측, 자석 버튼과 좌우 대칭)
+              const Positioned(right: 5, bottom: 130, child: BombBuffButton()),
               Align(
                 alignment: Alignment.bottomCenter,
                 child: Padding(
@@ -956,6 +1061,30 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
                   bottom: 0,
                   child: _buildNativeBanner(),
                 ),
+              // 💣 폭탄 발동 플래시 오버레이 (최상단, 터치는 통과)
+              // 켜질 때는 즉시(0ms) 최대 밝기 → 130ms 유지 → 350ms에 터지듯 페이드아웃
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: ValueListenableBuilder<double>(
+                    valueListenable: _bombFlashOpacity,
+                    builder: (context, opacity, _) => AnimatedOpacity(
+                      opacity: opacity,
+                      duration: opacity >= 1.0 ? Duration.zero : const Duration(milliseconds: 350),
+                      curve: Curves.easeOutCubic, // 초반에 급격히 꺼지는 폭발 감쇠 곡선
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          // 화면 절반 이상을 순백으로 확실히 덮고, 가장자리로 갈수록 진한 주황 섬광
+                          gradient: RadialGradient(
+                            colors: [Colors.white, Colors.white, Color(0xFFFFD54F), Color(0xFFFFA000)],
+                            stops: [0.0, 0.55, 0.85, 1.0],
+                            radius: 1.4,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
