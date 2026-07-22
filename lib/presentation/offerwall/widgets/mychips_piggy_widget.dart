@@ -108,7 +108,7 @@ class MyChipsPiggyWidgetState extends ConsumerState<MyChipsPiggyWidget> {
         }
 
         final userRepo = ref.read(userRepositoryProvider);
-        await userRepo.addEarning(amount: earnAmount);
+        await userRepo.addEarning(amount: earnAmount, source: 'offerwall_mychips');
 
         // 2. myChipsMoney 차감
         final user = ref.read(currentUserProvider);

@@ -442,7 +442,7 @@ class WorkNotifier extends StateNotifier<WorkNotifierState> {
 
     try {
       final userRepo = ref.read(userRepositoryProvider);
-      await userRepo.addEarning(amount: reward);
+      await userRepo.addEarning(amount: reward, source: 'work');
 
       final nextRound = state.workData.currentRound + 1;
       final newWorkData = state.workData.copyWith(

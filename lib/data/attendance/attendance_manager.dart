@@ -249,7 +249,7 @@ class AttendanceManager extends ChangeNotifier {
 
       // 서버에 동시에 저장
       await Future.wait([
-        userRepository.addEarning(amount: slot.reward),
+        userRepository.addEarning(amount: slot.reward, source: 'attendance'),
         repository.updateAttendanceData(userId: userId, data: updatedData),
       ]);
 
@@ -296,7 +296,7 @@ class AttendanceManager extends ChangeNotifier {
       showAllClearCelebration = true;
 
       // 3. 사용자에게 머니 지급
-      await userRepository.addEarning(amount: allSlot.reward);
+      await userRepository.addEarning(amount: allSlot.reward, source: 'attendance');
       print('사용자 머니 지급 완료: ${allSlot.reward}');
 
       // 4. 전체 출석체크 데이터를 서버에 저장 (중요!)

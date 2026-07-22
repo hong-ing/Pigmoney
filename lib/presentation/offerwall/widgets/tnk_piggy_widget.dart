@@ -128,7 +128,7 @@ class TnkPiggyWidgetState extends ConsumerState<TnkPiggyWidget> {
         }
 
         final userRepo = ref.read(userRepositoryProvider);
-        await userRepo.addEarning(amount: earnAmount);
+        await userRepo.addEarning(amount: earnAmount, source: 'offerwall_tnk');
         await ref.read(currentUserProvider.notifier).refreshUserData();
 
         // TNK 포인트 인출

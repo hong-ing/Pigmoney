@@ -102,7 +102,7 @@ class SnapPlayPiggyWidgetState extends ConsumerState<SnapPlayPiggyWidget> {
         }
 
         final userRepo = ref.read(userRepositoryProvider);
-        await userRepo.addEarning(amount: earnAmount);
+        await userRepo.addEarning(amount: earnAmount, source: 'offerwall_snapplay');
 
         // 2. snapPlayMoney 차감
         final user = ref.read(currentUserProvider);

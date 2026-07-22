@@ -51,7 +51,7 @@ class _BonusMoneyPopupDialogState extends ConsumerState<BonusMoneyPopupDialog> {
       final userRepo = ref.read(userRepositoryProvider);
 
       // 1. addEarning으로 보너스머니만큼 일반머니 추가
-      await userRepo.addEarning(amount: widget.bonusMoney);
+      await userRepo.addEarning(amount: widget.bonusMoney, source: 'bonus');
 
       // 2. Firestore에서 bonusMoney를 0으로 업데이트
       await userRepo.clearBonusMoney();

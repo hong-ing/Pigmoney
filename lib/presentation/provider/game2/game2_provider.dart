@@ -378,7 +378,7 @@ class Game2Notifier extends StateNotifier<Game2State> {
       final userRepo = ref.read(userRepositoryProvider);
       final currentUser = ref.read(currentUserProvider);
       if (currentUser != null) {
-        await userRepo.addEarning(amount: state.rewardAmount);
+        await userRepo.addEarning(amount: state.rewardAmount, source: 'moneyPang');
         await ref.read(currentUserProvider.notifier).fetchCurrentUser(forceRefresh: true);
       }
     } catch (e) {

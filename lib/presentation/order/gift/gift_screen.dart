@@ -6,19 +6,43 @@ import 'package:velocity_x/velocity_x.dart';
 
 import '../../../core/giftishow/models/goods_model.dart';
 import '../../../data/gift/model/gift_product.dart';
+import '../../../data/gift_order/model/gift_order.dart';
 import '../../provider/giftishow_provider.dart';
 import '../../provider/user_provider.dart';
+import 'gift_order_detail_screen.dart';
 import 'giftishow_detail_screen.dart';
 
 class GiftScreen extends ConsumerStatefulWidget {
-  const GiftScreen({super.key});
+  /// 탭 루트로 쓰일 때는 false (뒤로가기 버튼 숨김)
+  final bool showBackButton;
+
+  const GiftScreen({super.key, this.showBackButton = true});
 
   @override
   ConsumerState<GiftScreen> createState() => _GiftScreenState();
 }
 
-class _GiftScreenState extends ConsumerState<GiftScreen> {
+class _GiftScreenState extends ConsumerState<GiftScreen> with SingleTickerProviderStateMixin {
   final NumberFormat _currencyFormat = NumberFormat.decimalPattern('ko_KR');
+  final DateFormat _dateFormat = DateFormat('yyyy.MM.dd');
+  late TabController _tabController;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    // 탭 전환 시 선택 스타일 갱신
+    _tabController.addListener(() {
+      if (!_tabController.indexIsChanging) return;
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -30,10 +54,13 @@ class _GiftScreenState extends ConsumerState<GiftScreen> {
       appBar: AppBar(
         backgroundColor: Color(0xffE8ECF2),
         scrolledUnderElevation: 0,
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back, color: Colors.black),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        automaticallyImplyLeading: false,
+        leading: widget.showBackButton
+            ? IconButton(
+                icon: Icon(Icons.arrow_back, color: Colors.black),
+                onPressed: () => Navigator.of(context).pop(),
+              )
+            : null,
         title: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -46,8 +73,151 @@ class _GiftScreenState extends ConsumerState<GiftScreen> {
         ),
       ),
       body: SafeArea(
-        child: _buildGiftProductList(),
+        child: Column(
+          children: [
+            // 탭 바 (shop_screen과 동일 스타일)
+            TabBar(
+              controller: _tabController,
+              indicatorColor: Colors.transparent,
+              dividerHeight: 0,
+              labelPadding: EdgeInsets.symmetric(horizontal: 4.0),
+              tabs: [
+                _buildGiftTab(text: '구매하기', isSelected: _tabController.index == 0).pOnly(right: 5),
+                _buildGiftTab(text: '구매내역', isSelected: _tabController.index == 1).pOnly(left: 5),
+              ],
+            ).pOnly(left: 28, right: 28, top: 15),
+            // 탭 컨텐츠
+            TabBarView(
+              controller: _tabController,
+              physics: NeverScrollableScrollPhysics(),
+              children: [
+                _buildGiftProductList(),
+                _buildGiftOrderHistoryList(),
+              ],
+            ).expand(),
+          ],
+        ),
       ),
+    );
+  }
+
+  // 탭 UI 빌더 (shop_screen의 _buildShopTab과 동일 스타일)
+  Widget _buildGiftTab({required String text, required bool isSelected}) {
+    return Tab(
+      child: Container(
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.white : Color(0xFF3A3A3A),
+          borderRadius: BorderRadius.circular(10.0),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: isSelected ? Colors.black : Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 15,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // '구매내역' 탭 UI - users/{uid}.giftOrderHistory 실시간 조회 (최신순)
+  Widget _buildGiftOrderHistoryList() {
+    final currentUser = ref.watch(currentUserProvider);
+    if (currentUser == null) {
+      return '로그인이 필요합니다'.text.size(16).color(Colors.grey[400]!).make().centered();
+    }
+
+    final repository = ref.read(giftOrderRepositoryProvider);
+
+    return StreamBuilder<List<GiftOrderHistory>>(
+      stream: repository.getUserGiftOrdersStream(currentUser.uid),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return CircularProgressIndicator(color: Colors.orangeAccent).centered();
+        }
+
+        if (snapshot.hasError) {
+          return VStack([
+            Icon(Icons.error_outline, color: Colors.grey[400], size: 48),
+            16.heightBox,
+            '구매내역을 불러올 수 없습니다'.text.size(16).color(Colors.grey[400]!).make(),
+          ], crossAlignment: CrossAxisAlignment.center).centered();
+        }
+
+        final orders = List<GiftOrderHistory>.from(snapshot.data ?? []);
+        if (orders.isEmpty) {
+          return VStack([
+            Icon(Icons.receipt_long, color: Colors.grey[400], size: 48),
+            16.heightBox,
+            '구매 내역이 없습니다'.text.size(16).color(Colors.grey[400]!).make(),
+          ], crossAlignment: CrossAxisAlignment.center).centered();
+        }
+
+        // 최신순 정렬
+        orders.sort((a, b) => b.orderDate.compareTo(a.orderDate));
+
+        return ListView.builder(
+          padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+          itemCount: orders.length,
+          itemBuilder: (context, index) => _buildGiftOrderItem(orders[index]),
+        );
+      },
+    );
+  }
+
+  // 구매내역 항목 (상품명/금액/주문일자/상태/휴대폰번호)
+  Widget _buildGiftOrderItem(GiftOrderHistory order) {
+    Color statusColor = Colors.orangeAccent;
+    switch (order.status) {
+      case '사용완료':
+        statusColor = Colors.green;
+        break;
+      case '만료':
+        statusColor = Colors.red;
+        break;
+    }
+
+    return InkWell(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => GiftOrderDetailScreen(
+              orderId: order.orderId,
+              userId: order.userId,
+            ),
+          ),
+        );
+      },
+      child: VStack([
+        HStack([
+          order.goodsName.text.white.size(15).semiBold.make().expand(),
+          8.widthBox,
+          order.status.text.color(statusColor).size(13).bold.make(),
+        ]),
+        6.heightBox,
+        HStack([
+          '${_currencyFormat.format(order.price)} M'.text.color(Color(0xFFFACC15)).size(14).bold.make(),
+          12.widthBox,
+          _dateFormat.format(order.orderDate).text.color(Colors.grey[500]!).size(13).make(),
+        ]),
+        if (order.phoneNumber != null && order.phoneNumber!.isNotEmpty) ...[
+          6.heightBox,
+          HStack([
+            Icon(Icons.phone_android, color: Colors.grey[500], size: 14),
+            4.widthBox,
+            order.phoneNumber!.text.color(Colors.grey[400]!).size(13).make(),
+          ]),
+        ],
+      ])
+          .p16()
+          .box
+          .color(Color(0xFF1E1E1E))
+          .rounded
+          .make()
+          .pOnly(bottom: 10),
     );
   }
 

@@ -13,6 +13,7 @@ import '../../core/ads/admob_service.dart';
 import '../../core/utils/notification_service.dart';
 import '../../core/widgets/user_data_builder.dart';
 import '../home/home_screen.dart';
+import '../order/gift/gift_screen.dart';
 import '../order/order_main_screen.dart';
 import '../provider/attendance_provider.dart';
 import '../provider/game/game_provider.dart';
@@ -351,7 +352,9 @@ class _MainScreenState extends ConsumerState<MainScreen> with WidgetsBindingObse
       const HomeScreen(),
       const OfferWallScreen(),
       const ShoppingScreen(), // 쇼핑 화면
-      const OrderMainScreen(), // 통합 주문 화면
+      // 🔒 금·은 종료(kGoldSilverEnabled=false) 시 중간 선택 화면 없이 바로 기프티콘 화면
+      // (탭 루트로 쓰이므로 뒤로가기 버튼은 숨김)
+      kGoldSilverEnabled ? const OrderMainScreen() : const GiftScreen(showBackButton: false),
       const FriendInviteScreen(),
       const SettingScreen(),
     ];

@@ -91,7 +91,7 @@ class GmotechPiggyWidgetState extends ConsumerState<GmotechPiggyWidget> {
         }
 
         final userRepo = ref.read(userRepositoryProvider);
-        await userRepo.addEarning(amount: earnAmount);
+        await userRepo.addEarning(amount: earnAmount, source: 'offerwall_gmotech');
 
         // 2. gmotechMoney 차감
         final user = ref.read(currentUserProvider);

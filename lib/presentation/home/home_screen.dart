@@ -753,7 +753,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
 
       // 1. 머니 증가
       final userRepo = ref.read(userRepositoryProvider);
-      await userRepo.addEarning(amount: earnAmount);
+      await userRepo.addEarning(amount: earnAmount, source: 'roulette');
 
       // 2. snapPlayRouletteMoney 차감
       final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
@@ -815,7 +815,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
 
       // 1. 머니 증가
       final userRepo = ref.read(userRepositoryProvider);
-      await userRepo.addEarning(amount: earnAmount);
+      await userRepo.addEarning(amount: earnAmount, source: 'dice');
 
       // 2. snapPlayDiceMoney 차감
       final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);

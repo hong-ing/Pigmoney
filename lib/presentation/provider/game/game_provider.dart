@@ -402,9 +402,10 @@ class GameNotifier extends StateNotifier<GameState> {
     try {
       // ✅ amount는 항상 0 - money 변경은 _claimTempMoneyInternal에서 처리
       await userRepo.addEarning(
-        amount: 0,
+        amount: 0, // 동기화 전용 - amount 0이라 적립 기록 미생성
         luckyBagCount: bagChanged ? state.luckyBagCount : null,
         rewardRefillCount: refillChanged ? state.rewardRefillCount : null,
+        source: 'moneyTalk',
       );
       print('💾 서버 저장: bag=$bagChanged(${state.luckyBagCount}), refill=$refillChanged(${state.rewardRefillCount})');
 
@@ -880,6 +881,7 @@ class GameNotifier extends StateNotifier<GameState> {
       await userRepo.addEarning(
         amount: actualAmount,
         luckyBagCount: currentLuckyBagCount, // luckyBagCount도 함께 저장
+        source: 'moneyTalk',
       );
 
       // ✅ 사용자 데이터 새로고침 (서버에서 강제로)
@@ -946,8 +948,9 @@ class GameNotifier extends StateNotifier<GameState> {
 
         final userRepo = _ref.read(userRepositoryProvider);
         await userRepo.addEarning(
-          amount: 0, // 머니는 변경 없음
+          amount: 0, // 머니는 변경 없음 (동기화 전용)
           luckyBagCount: state.luckyBagCount,
+          source: 'moneyTalk',
         );
 
         // 로컬 캐시 업데이트
@@ -2505,8 +2508,9 @@ class GameNotifier extends StateNotifier<GameState> {
       try {
         final userRepo = _ref.read(userRepositoryProvider);
         await userRepo.addEarning(
-          amount: 0, // 머니 변경 없음
+          amount: 0, // 머니 변경 없음 (동기화 전용)
           luckyBagCount: state.luckyBagCount,
+          source: 'moneyTalk',
         );
 
         // 로컬 캐시도 동기화

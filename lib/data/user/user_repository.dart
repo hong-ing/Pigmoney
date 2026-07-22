@@ -244,11 +244,16 @@ class UserRepository {
     }
   }
 
+  /// 적립 출처(source) 값 목록 - 출처별 통계용
+  /// moneyTalk(머니톡톡) / moneyPang(머니팡팡) / roulette(행운룰렛) / dice(행운주사위)
+  /// work(만보기) / attendance(출석체크) / autoEarn(자동적립) / invite(친구초대)
+  /// bonus(보너스머니 전환) / offerwall_xxx(오퍼월 제휴사별) / etc(기타)
   Future<void> addEarning({
     required int amount, // 0이면 '돈' 갱신 생략
     int? luckyBagCount, // null → 변경 없음
     int? rewardRefillCount, // null → 변경 없음
     DateTime? ts,
+    String source = 'etc', // ✅ 적립 출처 (기본값 etc - 기존 호출부 호환)
   }) async {
     try {
       final user = _auth.currentUser;
@@ -294,14 +299,16 @@ class UserRepository {
 
         // 이벤트 로그는 amount가 0보다 클 때만 생성
         if (amount > 0) {
-          // 2) 일별 집계 (배열 + 합계)
+          // 2) 일별 집계 (배열 + 합계 + 출처별 누적)
           transaction.set(
             dailyRef,
             {
               'dailyMoney': FieldValue.arrayUnion([
-                {'amount': amount, 'ts': Timestamp.fromDate(now)},
+                {'amount': amount, 'ts': Timestamp.fromDate(now), 'source': source},
               ]), // 타임스탬프 포함으로 중복 허용
               'total': FieldValue.increment(amount), // 합계
+              // ✅ 출처별 누적 (merge:true로 다른 출처 키는 보존됨)
+              'bySource': {source: FieldValue.increment(amount)},
             },
             SetOptions(merge: true),
           );
@@ -775,7 +782,7 @@ class UserRepository {
       rawList[friendIndex]['isCollected'] = true;
 
       // 6. addEarning을 사용하여 머니 추가 (일별/월별 집계 포함)
-      await addEarning(amount: rewardAmount);
+      await addEarning(amount: rewardAmount, source: 'invite');
 
       // 7. inviteFriendList 업데이트 (원본 필드 구조 유지)
       final userRef = _firestore.doc('users/$uid');

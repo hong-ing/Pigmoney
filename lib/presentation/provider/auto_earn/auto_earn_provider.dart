@@ -541,7 +541,7 @@ class AutoEarnNotifier extends StateNotifier<AutoEarnState> {
 
       // 1. 머니 적립 - 실패 시 즉시 종료 (레벨 업데이트 하지 않음)
       try {
-        await userRepository.addEarning(amount: claimedMoney);
+        await userRepository.addEarning(amount: claimedMoney, source: 'autoEarn');
         print('✅ 머니 적립 성공: +$claimedMoney');
       } catch (e) {
         print('❌ 머니 적립 실패: $e');

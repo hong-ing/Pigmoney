@@ -233,6 +233,11 @@ class _GiftOrderDetailScreenState extends ConsumerState<GiftOrderDetailScreen> {
             _buildInfoRow('주문일자', _dateFormat.format(_orderData!.orderDate)),
             8.heightBox,
             _buildInfoRow('상태', _orderData!.status, isStatus: true),
+            // 구매 시 입력한 휴대폰 번호 (잘못 입력했는지 확인용 - 마스킹 없이 전체 표시)
+            if (_orderData!.phoneNumber != null && _orderData!.phoneNumber!.isNotEmpty) ...[
+              8.heightBox,
+              _buildInfoRow('휴대폰 번호', _orderData!.phoneNumber!),
+            ],
             if (_orderData!.expiryDate != null) ...[
               8.heightBox,
               _buildInfoRow(

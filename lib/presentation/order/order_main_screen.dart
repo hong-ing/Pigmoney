@@ -7,6 +7,12 @@ import 'package:velocity_x/velocity_x.dart';
 import 'gift/gift_screen.dart';
 import 'shop/shop_screen.dart';
 
+/// 🔒 금·은(실물 상품) 주문 기능 스위치
+/// - true  (현재/7월): 상점 진입 시 OrderMainScreen에서 [기프티콘]/[금,은] 선택
+/// - false (8월부터): 상점 진입 시 바로 GiftScreen, 금·은 관련 진입 전면 차단
+///   (ShopScreen 등 화면 코드는 삭제하지 않고 남겨둠 - 나중에 되살릴 수 있게)
+const bool kGoldSilverEnabled = true;
+
 class OrderMainScreen extends ConsumerWidget {
   const OrderMainScreen({super.key});
 
@@ -37,8 +43,8 @@ class OrderMainScreen extends ConsumerWidget {
 
               50.heightBox,
 
-              // 금,은 주문하기 버튼
-              if (Platform.isAndroid) ...{
+              // 금,은 주문하기 버튼 (🔒 kGoldSilverEnabled = false 이면 숨김)
+              if (kGoldSilverEnabled && Platform.isAndroid) ...{
                 _buildOrderButton(
                   isGift: false,
                   context: context,

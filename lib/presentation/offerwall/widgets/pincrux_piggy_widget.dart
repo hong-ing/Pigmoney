@@ -102,7 +102,7 @@ class PincruxPiggyWidgetState extends ConsumerState<PincruxPiggyWidget> {
 
         // 1. money에 추가
         final userRepo = ref.read(userRepositoryProvider);
-        await userRepo.addEarning(amount: earnAmount);
+        await userRepo.addEarning(amount: earnAmount, source: 'offerwall_pincrux');
 
         // 2. pincruxMoney 차감
         final user = ref.read(currentUserProvider);
