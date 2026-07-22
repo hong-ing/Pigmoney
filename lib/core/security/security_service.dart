@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:safe_device/safe_device.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -211,9 +212,18 @@ class SecurityCheckResult {
   /// 위험 요소가 있는지 여부를 반환합니다.
   bool get hasRisk => isRooted || isEmulator || isMockLocation || isDevelopmentMode || isUsbDebugging || isWirelessDebugging;
 
+  /// 🛠️ 디버그 빌드에서만 USB/무선 디버깅 항목을 차단 대상에서 제외한다.
+  /// (실기기 테스트 시 앱이 스스로 종료되어 개발이 불가능한 문제 해결)
+  /// kDebugMode는 release/profile 빌드에서 false이므로, 배포 빌드는 기존과 100% 동일하게 동작한다.
+  /// ⚠️ 루팅·에뮬레이터 등 다른 항목은 디버그 빌드에서도 그대로 차단된다.
+  bool get _ignoreDebuggingFlags => kDebugMode;
+
   /// 차단해야 하는 기기인지 여부를 반환합니다.
   /// (루팅, 에뮬레이터, USB 디버깅, 무선 디버깅인 경우 차단)
-  bool get shouldBlock => isRooted || isEmulator || isUsbDebugging || isWirelessDebugging;
+  bool get shouldBlock =>
+      isRooted ||
+      isEmulator ||
+      (!_ignoreDebuggingFlags && (isUsbDebugging || isWirelessDebugging));
 
   /// 차단 사유를 반환합니다.
   String get blockReason {
@@ -227,11 +237,11 @@ class SecurityCheckResult {
       reasons.add('에뮬레이터');
     }
 
-    if (isUsbDebugging) {
+    if (isUsbDebugging && !_ignoreDebuggingFlags) {
       reasons.add('USB 디버깅 활성화');
     }
 
-    if (isWirelessDebugging) {
+    if (isWirelessDebugging && !_ignoreDebuggingFlags) {
       reasons.add('무선 디버깅 활성화');
     }
 

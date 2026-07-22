@@ -23,6 +23,7 @@ import '../provider/auto_earn/auto_earn_provider.dart';
 import '../provider/midnight_reset_provider.dart';
 import '../provider/sync_loading_provider.dart';
 import '../game/widget/animation_bouncing.dart';
+import '../provider/game/game_provider.dart';
 import '../provider/game2/game2_provider.dart';
 import '../provider/settings_provider.dart';
 import '../provider/user_provider.dart';
@@ -461,6 +462,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
   // 상단 사용자 정보 및 게임 시작 버튼 섹션
   Widget _buildTopSection() {
     // 머니톡톡 GO! 버튼
+    // (오늘 종료했더라도 저금통에 남은 머니를 받을 수 있어야 하므로 입장은 항상 허용)
     Widget moneyTokTokButton = Container(
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -489,7 +491,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
           await Navigator.pushNamed(context, '/game');
           _checkAnimationFlags();
         },
-        child: '머니톡톡 GO!'.text.size(28).black.heightSnug.bold.make().pSymmetric(v: 10),
+        child: '머니톡톡 GO!'
+            .text
+            .size(28)
+            .black
+            .heightSnug
+            .bold
+            .make()
+            .pSymmetric(v: 10),
       ),
     );
 

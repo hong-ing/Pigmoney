@@ -424,14 +424,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
+      // 🐛 키보드가 올라와도 내용이 잘리지 않도록 스크롤 가능하게 처리
+      // ⚠️ IntrinsicHeight + Spacer 조합은 에러 없이 화면이 비는 문제가 있어 사용하지 않는다.
+      //    대신 Spacer를 고정 여백으로 바꾸고 단순 SingleChildScrollView로 감싼다.
       body: SafeArea(
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Spacer(),
+        child: SingleChildScrollView(
+          child: Form(
+                  key: _formKey,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+              const SizedBox(height: 60),
               Image.asset('assets/icons/ic_logo.png', width: 160, height: 160).centered(),
               '피그머니'.text.size(28).bold.white.center.make().centered(),
               if(_showLegacyLogin) 40.heightBox else 80.heightBox,
@@ -616,7 +620,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               ],
 
               // 기존 방식으로 로그인 버튼 (하단에 배치)
-              const Spacer(),
+              const SizedBox(height: 60),
               if (!_showLegacyLogin)
                 GestureDetector(
                   onTap: () {
@@ -624,9 +628,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   },
                   child: '기존 방식으로 로그인'.text.size(14).white.medium.center.make(),
                 ),
-              40.heightBox,
-            ],
-          ),
+                      40.heightBox,
+                    ],
+                  ),
+                ),
         ),
       ),
     );

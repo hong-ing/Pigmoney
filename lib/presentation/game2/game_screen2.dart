@@ -29,6 +29,8 @@ class GameScreen2 extends ConsumerStatefulWidget {
 class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderStateMixin, WidgetsBindingObserver {
   // 🎯 크리티컬 연출 스위치 (끄려면 false로만 변경)
   static const bool _game2CriticalEffectEnabled = true;
+  // 📊 내구도 게이지 바 스위치 (false면 기존 숫자 표시로 복귀)
+  static const bool _game2GaugeEnabled = true;
 
   Timer? _hideNavBarTimer;
 
@@ -548,20 +550,21 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
       key: _piggyStackKey,
       fit: StackFit.expand,
       children: [
+        // 상위에서 380px 고정 밴드로 높이를 통제하므로 스크롤 래핑 없이 Center 사용
+        // (스크롤/최소높이를 걸면 내용이 아래로 밀려 저금통 다리가 잘림 + 하단 MREC 영역과 충돌)
         Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // 돼지저금통 단계 표시
-              '돼지저금통 ${state.currentLevel}단계'.text.size(20).bold.white.make(),
-              if (Platform.isAndroid) const SizedBox(height: 4),
-
               // 최대 보상 금액 표시 (빨간색)
               '최대 ${NumberFormat('#,###').format(actualMaxReward)} M'.text.size(32).bold.color(Colors.red).make(),
-              if (Platform.isAndroid) const SizedBox(height: 10),
+              const SizedBox(height: 8),
 
-              // 회차 표시
-              '${state.currentRound}/10'.text.size(24).bold.white.make(),
+              // 📊 단계 배지 + 내구도 게이지 (저금통 위쪽)
+              if (_game2GaugeEnabled) ...[
+                _buildDurabilityGauge(state),
+                const SizedBox(height: 6),
+              ],
 
               // 저금통 이미지와 내구도 (터치 가능 영역)
               GestureDetector(
@@ -604,8 +607,8 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
                             },
                           ),
 
-                          // 내구도 표시
-                          '${state.currentDurability}'.text.size(32).bold.black.make(),
+                          // 내구도 표시 (게이지 스위치가 꺼져 있을 때만 숫자 표시)
+                          if (!_game2GaugeEnabled) '${state.currentDurability}'.text.size(32).bold.black.make(),
                         ],
                       ),
                     );
@@ -671,48 +674,80 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
   Widget _buildSummoningContent(Game2State state) {
     final levelConfig = piggyBankLevels[state.currentLevel - 1];
 
+    // ⏱️ 소환 진행률 (12시 방향부터 시계방향으로 링이 채워짐)
+    double progress = 0.0;
+    if (state.summonStartTime != null && state.summonDuration > 0) {
+      final elapsed = DateTime.now().difference(state.summonStartTime!).inMilliseconds / 1000.0;
+      progress = (elapsed / state.summonDuration).clamp(0.0, 1.0);
+    }
+
+    // 상단 380px 밴드 안에 링+저금통+문구가 모두 들어가도록 크기 산정
+    // (링 250 + 여백 8 + 문구 약 25 ≈ 300)
+    const double ringSize = 250;
+    const double pigSize = 165; // 소환 화면 전용 축소 크기 (게임 화면은 300 유지)
+
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // 회차 표시
-          const SizedBox(height: 25),
-          '${state.currentRound}/10'.text.size(24).bold.white.make(),
-          const SizedBox(height: 10),
-
-          // 소환 중인 저금통 (펄싱 효과)
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              // AnimatedBuilder로 애니메이션 반복 처리
-              AnimatedBuilder(
-                animation: _pulseController!,
-                builder: (context, child) {
-                  // _pulseController.value는 0.8 ~ 1.2 사이를 왔다갔다 함
-                  // 0.8~1.2를 0~1로 변환: (value - 0.8) / 0.4
-                  final normalizedValue = (_pulseController!.value - 0.8) / 0.4;
-
-                  // 어두운 상태(0.3)가 기본, 밝아질 때 최대 0.8까지
-                  // normalizedValue가 0.5일 때 가장 밝고(0.8), 0과 1일 때 가장 어두움(0.3)
-                  final double brightness = 0.3 + (0.5 * (1.0 - (2.0 * (normalizedValue - 0.5)).abs()));
-
-                  return Opacity(
-                    opacity: brightness.clamp(0.3, 0.8),
-                    child: Image.asset(
-                      'assets/icons/${levelConfig.pigImage}',
-                      width: 250,
+          // 저금통을 감싸는 원형 시계 링
+          SizedBox(
+            width: ringSize,
+            height: ringSize,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // 1) 시계처럼 채워지는 링 (저금통 바깥을 둘러쌈)
+                if (_game2GaugeEnabled)
+                  TweenAnimationBuilder<double>(
+                    tween: Tween<double>(end: progress),
+                    duration: const Duration(seconds: 1),
+                    curve: Curves.linear,
+                    builder: (context, value, _) => CustomPaint(
+                      size: const Size(ringSize, ringSize),
+                      painter: _SummonRingPainter(progress: value.clamp(0.0, 1.0)),
                     ),
-                  );
-                },
-              ),
-              if (state.summonTimerText != null) state.summonTimerText!.text.size(22).bold.white.make(),
-            ],
+                  ),
+
+                // 2) 소환 중인 저금통 (펄싱 효과) - 링 안쪽에 배치
+                AnimatedBuilder(
+                  animation: _pulseController!,
+                  builder: (context, child) {
+                    // _pulseController.value는 0.8 ~ 1.2 사이를 왔다갔다 함
+                    // 0.8~1.2를 0~1로 변환: (value - 0.8) / 0.4
+                    final normalizedValue = (_pulseController!.value - 0.8) / 0.4;
+
+                    // 어두운 상태(0.3)가 기본, 밝아질 때 최대 0.8까지
+                    final double brightness = 0.3 + (0.5 * (1.0 - (2.0 * (normalizedValue - 0.5)).abs()));
+
+                    return Opacity(
+                      opacity: brightness.clamp(0.3, 0.8),
+                      child: Image.asset(
+                        'assets/icons/${levelConfig.pigImage}',
+                        width: pigSize,
+                      ),
+                    );
+                  },
+                ),
+
+                // 3) 단계 배지 - 링 하단 중앙에 얹어 표시
+                if (_game2GaugeEnabled)
+                  Align(
+                    alignment: Alignment.bottomCenter,
+                    child: _buildLevelBadge(state.currentLevel),
+                  ),
+
+                // 게이지 사용 시 숫자 타이머는 숨김 (스위치 off면 기존 숫자 표시)
+                if (!_game2GaugeEnabled && state.summonTimerText != null)
+                  state.summonTimerText!.text.size(22).bold.white.make(),
+              ],
+            ),
           ),
 
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
 
-          // 안내 텍스트
-          '${state.currentLevel}단계 저금통 가져오는 중...'.text.size(18).bold.white.make(),
+          // 안내 텍스트 (단계는 링의 배지가 담당하므로 문구에서는 생략)
+          '저금통 가져오는 중...'.text.size(18).bold.white.make(),
         ],
       ),
     );
@@ -949,7 +984,131 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
     });
   }
 
-  // 🎯 크리티컬 연출 트리거 (provider의 touchPiggyBank에서 5% 확률로 호출)
+  // 🔢 단계 배지 (게이지 좌측의 원형 숫자) - '돼지저금통 N단계' 텍스트를 대체
+  Widget _buildLevelBadge(int level) {
+    const double size = 30;
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFFC107), Color(0xFFFF8F00)], // 금색 그라데이션
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        border: Border.all(color: Colors.white.withOpacity(0.85), width: 1.5),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 4, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Text(
+        '$level',
+        style: const TextStyle(color: Colors.black, fontSize: 15, fontWeight: FontWeight.w900, height: 1.0),
+      ),
+    );
+  }
+
+  // 📊 내구도 게이지 바
+  // - 메인 바: 빠르게(180ms) 줄어듦
+  // - 잔상 바: 느리게(600ms) 뒤따라 줄어듦 → 격투게임 체력바 같은 흰 잔상
+  // - 구간별 색: 50%↑ 초록 / 20~50% 주황 / 20%↓ 빨강(+깜빡임)
+  // - 터치 시 게이지도 함께 흔들려 타격감 연결
+  Widget _buildDurabilityGauge(Game2State state) {
+    final int maxDurability = state.maxDurability > 0 ? state.maxDurability : 1;
+    final double ratio = (state.currentDurability / maxDurability).clamp(0.0, 1.0);
+
+    // 구간별 색상
+    final Color barColor;
+    if (ratio > 0.5) {
+      barColor = const Color(0xFF4CAF50); // 초록
+    } else if (ratio > 0.2) {
+      barColor = const Color(0xFFFFA726); // 주황
+    } else {
+      barColor = const Color(0xFFE53935); // 빨강
+    }
+    final bool isDanger = ratio <= 0.2 && ratio > 0;
+
+    const double gaugeWidth = 260;
+    const double gaugeHeight = 22;
+
+    return AnimatedBuilder(
+      // 터치/크리티컬 흔들림 + 위험 구간 깜빡임(_pulseController)을 함께 반영
+      animation: Listenable.merge([_shakeController!, _criticalShakeController!, _pulseController!]),
+      builder: (context, child) {
+        final double normalShake = state.isShaking ? _shakeAnimation!.value * 0.4 : 0.0;
+        final double critV = _criticalShakeController!.value;
+        final double critShake = _criticalShakeController!.isAnimating ? sin(critV * pi * 5) * 10 * (1 - critV) : 0.0;
+
+        // 위험 구간에서 은은한 깜빡임 (0.55 ~ 1.0)
+        final double dangerOpacity = isDanger ? 0.55 + 0.45 * (1 - (_pulseController!.value - 0.5).abs() * 2).clamp(0.0, 1.0) : 1.0;
+
+        return Transform.translate(
+          offset: Offset(normalShake + critShake, 0),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 🔢 단계 배지 (게이지 좌측)
+              _buildLevelBadge(state.currentLevel),
+              const SizedBox(width: 10),
+              Container(
+                width: gaugeWidth,
+                height: gaugeHeight,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2A2A2A), // 트랙(빈 부분)
+                  borderRadius: BorderRadius.circular(gaugeHeight / 2),
+                  border: Border.all(color: Colors.white24, width: 1.5),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(gaugeHeight / 2),
+                  child: Stack(
+                    children: [
+                      // 잔상 바 (느리게 따라옴 - 크리티컬로 확 줄면 흰 잔상이 남음)
+                      TweenAnimationBuilder<double>(
+                        tween: Tween<double>(end: ratio),
+                        duration: const Duration(milliseconds: 600),
+                        curve: Curves.easeOut,
+                        builder: (context, ghost, _) => FractionallySizedBox(
+                          widthFactor: ghost,
+                          heightFactor: 1,
+                          child: Container(color: Colors.white.withOpacity(0.75)),
+                        ),
+                      ),
+                      // 메인 바 (빠르게 줄어듦)
+                      TweenAnimationBuilder<double>(
+                        tween: Tween<double>(end: ratio),
+                        duration: const Duration(milliseconds: 180),
+                        curve: Curves.easeOut,
+                        builder: (context, value, _) => FractionallySizedBox(
+                          widthFactor: value,
+                          heightFactor: 1,
+                          child: Opacity(
+                            opacity: dangerOpacity,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [barColor.withOpacity(0.85), barColor],
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // 🎯 크리티컬 연출 트리거 (provider의 touchPiggyBank에서 8% 확률로 호출)
   void _triggerCriticalEffect() {
     if (!mounted || !_game2CriticalEffectEnabled) return;
 
@@ -1057,6 +1216,55 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
 }
 
 // 터치 효과 클래스
+// ⏱️ 소환 진행 링 페인터 (저금통을 감싸는 큰 원)
+// 12시 방향에서 시작해 시계방향으로 링(호)이 채워진다.
+// 안쪽은 비워두어 저금통 이미지가 그대로 보이게 한다.
+class _SummonRingPainter extends CustomPainter {
+  final double progress; // 0.0 ~ 1.0
+  _SummonRingPainter({required this.progress});
+
+  static const double _strokeWidth = 12;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Offset center = Offset(size.width / 2, size.height / 2);
+    final double radius = (size.width - _strokeWidth) / 2;
+    final Rect rect = Rect.fromCircle(center: center, radius: radius);
+
+    // 1) 바탕 링 (남은 시간)
+    final trackPaint = Paint()
+      ..color = const Color(0xFF2A2A2A)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = _strokeWidth;
+    canvas.drawCircle(center, radius, trackPaint);
+
+    // 2) 채워진 링 (경과 시간) - 12시(-90°)부터 시계방향
+    if (progress > 0) {
+      final progressPaint = Paint()
+        ..shader = const SweepGradient(
+          startAngle: 0,
+          endAngle: 2 * pi,
+          colors: [Color(0xFF42A5F5), Color(0xFF7E57C2), Color(0xFF42A5F5)], // 파랑 → 보라 → 파랑
+          transform: GradientRotation(-pi / 2),
+        ).createShader(rect)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = _strokeWidth
+        ..strokeCap = StrokeCap.round;
+
+      canvas.drawArc(
+        rect,
+        -pi / 2, // 12시 방향에서 시작
+        2 * pi * progress, // 시계방향으로 진행
+        false, // 링(호)만 - 중심과 잇지 않음
+        progressPaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SummonRingPainter oldDelegate) => oldDelegate.progress != progress;
+}
+
 class TouchEffect {
   final String id;
   final Offset position;

@@ -85,6 +85,9 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
     notifier.onStartBombScatterAnimation = _startBombScatterAnimation;
     notifier.onBombFlash = _triggerBombFlash;
 
+    // 🎉 사이클 완주 모달 콜백
+    notifier.onShowCycleCompleteDialog = _showCycleCompleteDialog;
+
     // 리필 확인 다이얼로그 콜백 설정
     notifier.onShowRefillConfirm = _showRefillConfirmDialog;
 
@@ -305,6 +308,199 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
     } catch (e) {
       print('_startCoinDropAnimation 에러: $e');
     }
+  }
+
+  // 🎉 사이클 완주 모달 (15/30/45회차)
+  void _showCycleCompleteDialog(int cycleIndex, int? todayTotal) {
+    if (!mounted) return;
+
+    // 사이클별 문구
+    final String emoji = cycleIndex == 1 ? '🎉' : (cycleIndex == 2 ? '🔥' : '👑');
+    final String title = '$emoji ${cycleIndex}사이클 완료!';
+    final String body;
+    final String continueLabel;
+    switch (cycleIndex) {
+      case 1:
+        body = '오늘의 기본 코스를 다 하셨어요!\n여기서 마무리하셔도 충분합니다.\n이어서 하시면 적립 효율이\n조금씩 낮아져요.';
+        continueLabel = '2사이클 도전!';
+        break;
+      case 2:
+        body = '벌써 두 바퀴나 도셨네요, 대단해요!\n이제부터는 적립 효율이\n더 낮아집니다.';
+        continueLabel = '3사이클 도전!';
+        break;
+      default:
+        body = '오늘 정말 열심히 하셨어요.\n마지막 안내예요!\n좋아요, 어디 한번 갈 때까지 가보죠!';
+        continueLabel = '갈 때까지 가보기!';
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        content: SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // 축하 연출: 이모지가 커지며 등장
+              TweenAnimationBuilder<double>(
+                tween: Tween<double>(begin: 0.4, end: 1.0),
+                duration: const Duration(milliseconds: 450),
+                curve: Curves.elasticOut,
+                builder: (context, scale, child) => Transform.scale(scale: scale, child: child),
+                child: Text(emoji, style: const TextStyle(fontSize: 56)),
+              ),
+              const SizedBox(height: 10),
+              title.text.size(20).bold.color(const Color(0xffB62EEF)).letterSpacing(-0.3).make(),
+              const SizedBox(height: 14),
+              // 오늘 모은 머니 (조회 실패 시 생략)
+              if (todayTotal != null) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade100,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: '오늘 머니톡톡에서 모은 머니\n${NumberFormat('#,###').format(todayTotal)} M'
+                      .text
+                      .size(14)
+                      .bold
+                      .black
+                      .align(TextAlign.center)
+                      .heightRelaxed
+                      .make(),
+                ),
+                const SizedBox(height: 14),
+              ],
+              // 단어 중간에서 끊기지 않도록 명시적 줄바꿈 + 여유 폭 확보
+              Text(
+                body,
+                textAlign: TextAlign.center,
+                softWrap: true,
+                style: const TextStyle(fontSize: 13, color: Colors.black, height: 1.5, letterSpacing: -0.2),
+              ),
+              const SizedBox(height: 20),
+              // 오늘은 여기까지 (+10,000 M)
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    _applyVibration();
+                    Navigator.of(dialogContext).pop();
+                    _showFinishConfirmDialog();
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xff2E96EF),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: '오늘은 여기까지 (+10,000 M)'.text.size(15).white.bold.make(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              // 계속하기
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () {
+                    _applyVibration();
+                    Navigator.of(dialogContext).pop(); // 보상 없이 닫고 계속 진행
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xffB62EEF),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: continueLabel.text.size(15).white.bold.make(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // 🎉 '오늘은 여기까지' 확인 모달 (실수 방지)
+  void _showFinishConfirmDialog() {
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        content: SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 단어 중간에서 끊기지 않도록 명시적 줄바꿈 사용
+              const Text(
+                '완주 보상 10,000 M를 받고\n오늘 머니톡톡을 마칩니다.\n\n한 번 마치면 오늘은 다시 시작할 수 없어요.\n(상자에 남은 동전은 계속 사용 가능합니다)',
+                textAlign: TextAlign.center,
+                softWrap: true,
+                style: TextStyle(fontSize: 14, color: Colors.black, height: 1.5, letterSpacing: -0.2),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.grey,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: '취소'.text.size(15).white.bold.make(),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(dialogContext).pop();
+                        _finishMoneyTalkToday();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xff2E96EF),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: '받고 오늘 마치기'.text.size(15).white.bold.make(),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // 🎉 완주 보상 지급 + 종료 처리 + 홈 이동
+  Future<void> _finishMoneyTalkToday() async {
+    final notifier = ref.read(gameProvider.notifier);
+    final bonusGiven = await notifier.finishTodayMoneyTalk();
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(bonusGiven ? '완주 보상 10,000 M가 지급되었습니다!' : '오늘 머니톡톡을 마쳤습니다.'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+
+    // 홈 화면으로 이동
+    Navigator.of(context).pop();
   }
 
   // 💣 폭탄 발동 시 화면 플래시 효과용 (0.0 = 안 보임)
@@ -797,7 +993,7 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
+  void didChangeAppLifecycleState(AppLifecycleState state) async {
     super.didChangeAppLifecycleState(state);
 
     final gameNotifier = ref.read(gameProvider.notifier);
@@ -811,15 +1007,18 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
 
       // 확실한 데이터 새로고침
       // _forceRefreshAllProvidersAndGame();
-    } else if (state == AppLifecycleState.inactive) {
-      print('🎵 게임 화면 inactive - 오디오 일시정지');
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      // 📦 inactive뿐 아니라 paused/detached/hidden에서도 반드시 저장한다.
+      //    (OS가 inactive를 건너뛰거나 곧바로 프로세스를 정리하는 경우 대비)
+      print('🎵 게임 화면 $state - 오디오 일시정지 + luckyBagCount 서버 저장');
 
-      // inactive 상태에서도 오디오 일시정지
       gameNotifier.pauseBackgroundMusic();
 
-      // 📦 inactive 상태에서도 luckyBagCount 서버 저장
-      print('📦 앱 inactive - luckyBagCount 서버 저장');
-      gameNotifier.saveLuckyBagCountOnExit();
+      // await로 완료를 기다림 (내부에 재시도 로직 포함)
+      await gameNotifier.saveLuckyBagCountOnExit();
     }
   }
 

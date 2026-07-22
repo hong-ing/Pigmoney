@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as fb;
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -367,7 +368,8 @@ class _MyAppState extends State<MyApp> {
         final allReasons = <String>[];
         if (securityResult.isRooted) allReasons.add('루팅된 기기');
         if (securityResult.isEmulator) allReasons.add('에뮬레이터');
-        if (securityResult.isUsbDebugging) allReasons.add('USB 디버깅 활성화');
+        // 🛠️ 디버그 빌드에서는 USB 디버깅을 차단 사유에서 제외 (shouldBlock과 동일 기준)
+        if (securityResult.isUsbDebugging && !kDebugMode) allReasons.add('USB 디버깅 활성화');
         if (isMultiAccountDetected) allReasons.add('다중계정 앱 감지');
         if (shouldBlockNoSim) allReasons.add('SIM 카드 없음');
         final combinedReason = allReasons.isNotEmpty

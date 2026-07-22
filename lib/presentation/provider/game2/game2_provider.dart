@@ -34,7 +34,7 @@ class Game2Notifier extends StateNotifier<Game2State> {
 
   // 🎯 크리티컬 시스템 스위치 (끄려면 false로만 변경)
   static const bool _game2CriticalEnabled = true;
-  static const double _criticalChance = 0.05; // 5% 확률
+  static const double _criticalChance = 0.05; // 5% 확률 (가끔 뜨지만 확 빠지는 방향)
   static const int _criticalDamage = 10; // 크리티컬 시 내구도 감소량
 
   final Random _random = Random();

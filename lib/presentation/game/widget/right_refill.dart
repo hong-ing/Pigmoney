@@ -22,6 +22,9 @@ class _RightRefillButtonState extends ConsumerState<RightRefillButton> {
   // 리필 50회 시스템: 현재 회차 = 51 - 남은 횟수
   final int _maxRefillCount = 51;
 
+  // 🎯 사이클 크기 (15회 = 1사이클). 지갑 하단 진행도 'N/15' 표시용
+  static const int _cycleSize = 15;
+
   String _getRefillOnIconPath(int currentRound) {
     return 'assets/icons/ic_refill_on.png';
   }
@@ -48,6 +51,8 @@ class _RightRefillButtonState extends ConsumerState<RightRefillButton> {
     final maxCoins = ref.watch(gameProvider.select((s) => s.maxCoins));
     final fillSpeedText = ref.watch(gameProvider.select((s) => s.fillSpeedText));
     final isFillingCoins = ref.watch(gameProvider.select((s) => s.isFillingCoins));
+    // 🎉 오늘 머니톡톡 종료 시: 지갑 0 표시 + 리필 불가
+    final isFinished = ref.watch(gameProvider.select((s) => s.isMoneyTalkFinished));
 
     // 현재 회차 계산 (50/50에서 시작 → 1회차, 49/50 → 2회차)
     final currentRound = _maxRefillCount - refillCount;
@@ -62,7 +67,10 @@ class _RightRefillButtonState extends ConsumerState<RightRefillButton> {
 
         // ✅ displayCoins 계산 로직 개선
         int displayCoins;
-        if (refillCount > 0) {
+        if (isFinished) {
+          // 🎉 오늘 종료: 항상 0 표시 (탭도 비활성화됨)
+          displayCoins = 0;
+        } else if (refillCount > 0) {
           // 리필 횟수가 남아있는 경우
           final currentRound = _maxRefillCount - refillCount;
 
@@ -158,6 +166,19 @@ class _RightRefillButtonState extends ConsumerState<RightRefillButton> {
               // (무한 리필 순환으로 refillCount는 0이 되지 않지만, 구버전/예외 대비 메시지는 남겨둠)
               if (refillCount == 0)
                 '오늘은 끝!'.text
+                    .size(13)
+                    .heightTight
+                    .bold
+                    .letterSpacing(-0.2)
+                    .color(displayCoins != 0 ? Colors.white : Colors.grey)
+                    .make()
+                    .pOnly(top: fillSpeedText != null && isFillingCoins ? 5 : 0)
+              // 🎯 사이클 잔여 횟수 'N/15' (감소 방식)
+              // 사이클 시작 15/15 → 리필할 때마다 1씩 감소 → 15회를 채우면 다시 15/15로 리셋
+              // (currentRound는 1부터 시작하므로 -1 보정 후 사이클 크기로 나눈 나머지를 뺀다)
+              else if (!isFinished)
+                '${_cycleSize - ((currentRound - 1) % _cycleSize)}/$_cycleSize'
+                    .text
                     .size(13)
                     .heightTight
                     .bold

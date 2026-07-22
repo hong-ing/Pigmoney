@@ -138,6 +138,15 @@ class GameNotifier extends StateNotifier<GameState> {
   // 리필 관련 타이머 추가
   Timer? _coinsFillTimer;
 
+  // 📦 luckyBagCount 서버 저장 보강 (초기화 버그 대응)
+  // - 동전 소비로 값이 줄 때마다 디바운스로 서버에 반영해, 저장 누락 시에도 손실을 수 초로 제한
+  // - _lastSyncedLuckyBagCount: 마지막으로 '서버에 반영된 것이 확인된' 값 (쓰기 중복 방지용)
+  //   서버 권위 구조는 그대로 유지되며, 이 값은 저장 여부 판단에만 사용됨
+  Timer? _bagSaveDebounceTimer;
+  static const int _bagSaveDebounceMs = 4000; // 4초: 연타 구간을 한 번의 쓰기로 묶는 최소 주기
+  int? _lastSyncedLuckyBagCount;
+  bool _isSavingBag = false; // luckyBagCount 저장 진행 중 (중복 실행 방지)
+
   // 🎯 백그라운드 충전 문제 해결을 위한 시간 기반 계산
   DateTime? _fillStartTime;
 
@@ -171,6 +180,33 @@ class GameNotifier extends StateNotifier<GameState> {
   static const bool _refillCycleEnabled = true;
   static const int _refillCycleRestoreCount = 10; // 순환 복귀 지점: round 41 = _maxRefillCount(51) - 10
 
+  // 🎉 사이클 완주 시스템 스위치 (끄려면 false로만 변경)
+  // 리필 회차 15/30/45 도달 시 완주 모달 → 보상 받고 종료 or 계속 진행
+  static const bool cycleSystemEnabled = true;
+  static const List<int> _cycleRounds = [15, 30, 45]; // 사이클 완주 회차
+  static const int _cycleBonusAmount = 10000; // 완주 보상 머니
+  static const String _cycleShownKeyPrefix = 'cycleShown_'; // + round_gameDate
+  static const String _cycleBonusGivenKeyPrefix = 'cycleBonusGiven_'; // + gameDate
+  static const String _moneyTalkFinishedDateKey = 'moneyTalkFinishedDate'; // 종료한 게임날짜
+
+  /// 🎉 사이클 완주 모달 표시 콜백 (cycleIndex: 1~3, todayTotal: 오늘 모은 머니, null이면 표시 생략)
+  Function(int cycleIndex, int? todayTotal)? onShowCycleCompleteDialog;
+
+  /// 오늘 머니톡톡을 종료했는지 확인 (게임 날짜 기준 - 날이 바뀌면 자동 해제)
+  static Future<bool> isMoneyTalkFinishedToday() async {
+    if (!cycleSystemEnabled) return false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final finishedDate = prefs.getString(_moneyTalkFinishedDateKey);
+      if (finishedDate == null) return false;
+      // 저장된 날짜가 '오늘 게임날짜'와 다르면 자동으로 해제된 것으로 간주
+      return finishedDate == KoreanTimeUtils.getCurrentGameDateKey();
+    } catch (e) {
+      print('🎉 머니톡톡 종료 상태 확인 오류: $e');
+      return false;
+    }
+  }
+
   // ✅ 전면광고 준비 중 플래그 (중복 호출 방지)
   bool _isPreparingCoinAd = false;
 
@@ -180,6 +216,7 @@ class GameNotifier extends StateNotifier<GameState> {
     _setupConnectivityListener();
     _loadMagnetBuffState(); // 🧲 자석 버프 보유/쿨타임 상태 복원
     _loadBombBuffState(); // 💣 폭탄 게이지 상태 복원
+    _loadMoneyTalkFinishedState(); // 🎉 오늘 머니톡톡 종료 여부 복원
     _preloadBombExplosionSound(); // 💣 폭발음 미리 로드 (재생 지연 방지)
   }
 
@@ -271,6 +308,10 @@ class GameNotifier extends StateNotifier<GameState> {
       print('🔄 게임 상태 유지하며 서버 데이터 동기화 시작');
       syncLoading.startLoading(message: '게임 데이터를 동기화하는 중...');
 
+      // 📦 [중요] 서버 값을 가져오기 전에 미저장 소비분을 먼저 반영한다.
+      // 그래야 아래에서 서버 값으로 덮어써도 세션 진행분이 유실되지 않는다.
+      await flushPendingLuckyBagSave();
+
       // 1. 사용자 데이터 새로고침 (서버에서 최신 정보 가져오기)
       syncLoading.updateMessage('사용자 정보를 가져오는 중');
       await _ref.read(currentUserProvider.notifier).fetchCurrentUser(forceRefresh: true);
@@ -287,7 +328,12 @@ class GameNotifier extends StateNotifier<GameState> {
       final serverMoney = user.money;
 
       // 리셋 버전이 변경되었는지 체크
-      if (state.sessionResetVersion != user.resetVersion) {
+      // 🛡️ sessionResetVersion이 null이면 '아직 로드 전'이라는 뜻이므로 리셋으로 오판하지 않는다.
+      //    (노티파이어 재생성 직후 동기화가 먼저 도는 경우 세션 진행분이 날아가는 것 방지)
+      if (state.sessionResetVersion == null) {
+        print('🛡️ 세션 리셋버전 미설정 - 리셋 판정 보류하고 버전만 반영');
+        state = state.copyWith(sessionResetVersion: user.resetVersion);
+      } else if (state.sessionResetVersion != user.resetVersion) {
         // 새로운 리셋이 발생한 경우 - 서버 데이터로 완전히 초기화
         print('🌅 새로운 리셋 감지 - 서버 데이터로 초기화');
         print('  현재 세션: ${state.sessionResetVersion} vs 서버: ${user.resetVersion}');
@@ -407,6 +453,7 @@ class GameNotifier extends StateNotifier<GameState> {
         rewardRefillCount: refillChanged ? state.rewardRefillCount : null,
         source: 'moneyTalk',
       );
+      if (bagChanged) _lastSyncedLuckyBagCount = state.luckyBagCount; // 📦 서버 반영 기준값 갱신
       print('💾 서버 저장: bag=$bagChanged(${state.luckyBagCount}), refill=$refillChanged(${state.rewardRefillCount})');
 
       // 서버 저장이 완료되었으므로 즉시 새로고침
@@ -717,6 +764,139 @@ class GameNotifier extends StateNotifier<GameState> {
     });
   }
 
+  /// 🎉 사이클 완주 체크 - 리필 완료 직후 호출
+  /// 회차가 15/30/45에 도달하면 완주 모달 표시 (각 사이클당 하루 1회)
+  Future<void> _checkCycleComplete() async {
+    if (!cycleSystemEnabled) return;
+    if (_isDisposed || _isNotifierDisposed) return;
+
+    try {
+      final int round = _maxRefillCount - state.rewardRefillCount;
+      if (!_cycleRounds.contains(round)) return;
+
+      final prefs = await SharedPreferences.getInstance();
+      final gameDate = KoreanTimeUtils.getCurrentGameDateKey();
+      final shownKey = '$_cycleShownKeyPrefix${round}_$gameDate';
+
+      // 이미 오늘 본 사이클이면 다시 표시하지 않음 (회차 순환으로 재도달해도 1회만)
+      if (prefs.getBool(shownKey) ?? false) {
+        print('🎉 ${round}회차 사이클 모달 - 오늘 이미 표시함');
+        return;
+      }
+
+      // 🛡️ 콜백이 연결되지 않았으면(화면 미준비) 표시 이력을 남기지 않고 중단
+      //    → 다음 기회에 다시 시도됨 (미리 마킹하면 모달을 한 번도 못 보고 하루가 지나감)
+      if (onShowCycleCompleteDialog == null) {
+        print('🎉 ${round}회차 사이클 모달 - 콜백 미연결로 보류');
+        return;
+      }
+
+      // 오늘 모은 머니 조회 (실패 시 null → 모달에서 해당 줄 생략)
+      int? todayTotal;
+      try {
+        // 머니톡톡 적립분만 조회 (bySource.moneyTalk)
+        todayTotal = await _ref.read(userRepositoryProvider).getTodayTotalEarnings(source: 'moneyTalk');
+      } catch (e) {
+        print('🎉 오늘 적립 합계 조회 실패 (생략): $e');
+      }
+
+      if (_isDisposed || _isNotifierDisposed) return;
+
+      final cycleIndex = _cycleRounds.indexOf(round) + 1; // 1, 2, 3
+      print('🎉 ${cycleIndex}사이클 완료! (${round}회차, 오늘 적립=$todayTotal)');
+      onShowCycleCompleteDialog!.call(cycleIndex, todayTotal);
+
+      // ✅ 실제로 모달을 띄운 뒤에 '오늘 표시함'으로 마킹 (중복 표시 방지)
+      await prefs.setBool(shownKey, true);
+    } catch (e) {
+      print('🎉 사이클 완주 체크 오류: $e');
+    }
+  }
+
+  /// 🎉 앱/게임 진입 시 오늘 종료 여부 복원 (게임 날짜 기준이라 날이 바뀌면 자동 false)
+  Future<void> _loadMoneyTalkFinishedState() async {
+    if (!cycleSystemEnabled) return;
+    try {
+      final finished = await isMoneyTalkFinishedToday();
+      if (_isDisposed || _isNotifierDisposed) return;
+      if (finished != state.isMoneyTalkFinished) {
+        state = state.copyWith(isMoneyTalkFinished: finished);
+      }
+      if (finished) {
+        // 종료 상태로 진입한 경우: 충전 타이머가 돌지 않도록 확실히 정지
+        _coinsFillTimer?.cancel();
+        _coinsFillTimer = null;
+        state = state.copyWith(isFillingCoins: false, clearFillSpeedText: true);
+        print('🎉 오늘 머니톡톡 종료 상태로 진입 - 동전 배출/리필 차단');
+      }
+    } catch (e) {
+      print('🎉 머니톡톡 종료 상태 복원 오류: $e');
+    }
+  }
+
+  /// 🎉 '오늘은 여기까지' - 완주 보상 지급 + 오늘 머니톡톡 종료 처리
+  /// 반환: 보상이 실제로 지급되었는지 여부
+  Future<bool> finishTodayMoneyTalk() async {
+    if (!cycleSystemEnabled) return false;
+
+    bool bonusGiven = false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final gameDate = KoreanTimeUtils.getCurrentGameDateKey();
+
+      // 1) 완주 보상 지급 (하루 1회만 - 중복 방지)
+      final bonusKey = '$_cycleBonusGivenKeyPrefix$gameDate';
+      if (!(prefs.getBool(bonusKey) ?? false)) {
+        await prefs.setBool(bonusKey, true); // 먼저 마킹 (중복 호출 차단)
+        try {
+          await _ref.read(userRepositoryProvider).addEarning(
+                amount: _cycleBonusAmount,
+                source: 'cycleBonus',
+              );
+          bonusGiven = true;
+          print('🎉 완주 보상 지급: $_cycleBonusAmount M');
+        } catch (e) {
+          // 지급 실패 시 마킹 해제 (다음 시도 가능하도록)
+          await prefs.setBool(bonusKey, false);
+          print('🎉 완주 보상 지급 실패: $e');
+        }
+      } else {
+        print('🎉 완주 보상 - 오늘 이미 지급됨');
+      }
+
+      // 2) 지갑 자동 충전(리필) 타이머 정지 - 오늘은 더 이상 충전 안 됨
+      _coinsFillTimer?.cancel();
+      _coinsFillTimer = null;
+      _fillStartTime = null;
+      if (!_isDisposed && !_isNotifierDisposed) {
+        state = state.copyWith(isFillingCoins: false, clearFillSpeedText: true);
+      }
+      await prefs.remove('fillStartTime');
+      await prefs.remove('fillStartCoins');
+      await prefs.setBool('isFillingCoins', false);
+      await prefs.setBool('isRightRefillFull', false); // 홈 펄스 플래그도 해제
+      print('🎉 지갑 자동 충전 정지');
+
+      // 3) 지갑 충전 완료 로컬 알림 취소 (예약된 알림 제거)
+      await NotificationService().cancelCoinPurseFullNotification();
+      print('🎉 지갑 가득참 알림 취소');
+
+      // 4) 오늘 종료 상태 저장 (게임 날짜 기준 - 날이 바뀌면 자동 해제)
+      await prefs.setString(_moneyTalkFinishedDateKey, gameDate);
+      if (!_isDisposed && !_isNotifierDisposed) {
+        // 화면(빈 바닥 / '내일 다시 만나요' / 지갑 0·비활성)에 즉시 반영
+        state = state.copyWith(isMoneyTalkFinished: true);
+      }
+      print('🎉 오늘($gameDate) 머니톡톡 종료 처리 완료');
+
+      // 5) 최종 로컬 저장
+      await _saveGameStateToPrefs();
+    } catch (e) {
+      print('🎉 머니톡톡 종료 처리 오류: $e');
+    }
+    return bonusGiven;
+  }
+
   /// 💣 앱 시작 시 폭탄 게이지 상태 복원
   Future<void> _loadBombBuffState() async {
     if (!bombBuffEnabled) return;
@@ -929,41 +1109,85 @@ class GameNotifier extends StateNotifier<GameState> {
     }
   }
 
-  /// 🚪 게임 화면 이탈 시 luckyBagCount를 서버에 저장
-  /// (뒤로가기, 홈버튼, 앱 종료 등)
-  Future<void> saveLuckyBagCountOnExit() async {
-    if (state.hasLoadError) return; // 로드 실패 상태에서는 저장 방지
-    if (_isSaving || _isRefilling) {
-      print('📦 이미 저장 중이거나 리필 중 - 저장 건너뛰기');
+  /// 📦 동전 소비 시 서버 저장 예약 (디바운스)
+  /// 매 소비마다 쓰면 Firestore 비용이 폭증하므로 마지막 변경 후 4초 뒤 한 번만 저장한다.
+  void _scheduleLuckyBagServerSave() {
+    if (_isDisposed || _isNotifierDisposed) return;
+    _bagSaveDebounceTimer?.cancel();
+    _bagSaveDebounceTimer = Timer(const Duration(milliseconds: _bagSaveDebounceMs), () {
+      _flushLuckyBagToServer();
+    });
+  }
+
+  /// 📦 예약된 저장을 즉시 실행 (이탈/리셋/동기화 직전에 호출)
+  Future<void> flushPendingLuckyBagSave() async {
+    _bagSaveDebounceTimer?.cancel();
+    _bagSaveDebounceTimer = null;
+    await _flushLuckyBagToServer();
+  }
+
+  /// 📦 luckyBagCount 서버 저장 (재시도 포함)
+  /// - 다른 저장/리필이 진행 중이면 '조용히 스킵'하지 않고 잠시 대기 후 재시도 → 저장 유실 방지
+  /// - 서버 반영 확인된 값(_lastSyncedLuckyBagCount)과 비교해 불필요한 쓰기만 생략
+  ///   (캐시된 user 값 비교는 stale일 때 오판 위험이 있어 사용하지 않음)
+  Future<void> _flushLuckyBagToServer({int attempt = 0}) async {
+    if (_isDisposed || _isNotifierDisposed) return;
+    if (state.hasLoadError) return; // 로드 실패 상태에서는 저장 방지 (서버 값 훼손 방지)
+    if (_isSavingBag) return; // 이미 저장 중이면 그 저장이 최신 값을 반영함
+
+    final int target = state.luckyBagCount;
+
+    // 서버에 이미 반영된 값과 동일하면 쓰기 생략
+    if (_lastSyncedLuckyBagCount != null && _lastSyncedLuckyBagCount == target) {
       return;
     }
 
-    try {
-      final user = _ref.read(currentUserProvider);
-      if (user == null) return;
-
-      // 서버 값과 현재 state 값이 다른 경우에만 저장
-      if (state.luckyBagCount != user.luckyBagCount) {
-        print('📦 게임 이탈 - luckyBagCount 서버 저장: ${state.luckyBagCount} (서버: ${user.luckyBagCount})');
-
-        final userRepo = _ref.read(userRepositoryProvider);
-        await userRepo.addEarning(
-          amount: 0, // 머니는 변경 없음 (동기화 전용)
-          luckyBagCount: state.luckyBagCount,
-          source: 'moneyTalk',
-        );
-
-        // 로컬 캐시 업데이트
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setInt('luckyBagCount', state.luckyBagCount);
-
-        print('✅ luckyBagCount 서버 저장 완료');
-      } else {
-        print('📦 luckyBagCount 변경 없음 - 저장 건너뛰기');
+    // 다른 저장/리필 진행 중 → 스킵하지 않고 대기 후 재시도 (최대 5회 ≈ 2.5초)
+    if (_isSaving || _isRefilling) {
+      if (attempt >= 5) {
+        print('📦 저장 경합 지속 - 디바운스로 재예약');
+        _scheduleLuckyBagServerSave();
+        return;
       }
-    } catch (e) {
-      print('⚠️ luckyBagCount 서버 저장 실패: $e');
+      await Future.delayed(const Duration(milliseconds: 500));
+      return _flushLuckyBagToServer(attempt: attempt + 1);
     }
+
+    _isSavingBag = true;
+    try {
+      final userRepo = _ref.read(userRepositoryProvider);
+      await userRepo.addEarning(
+        amount: 0, // 머니는 변경 없음 (동기화 전용)
+        luckyBagCount: target,
+        source: 'moneyTalk',
+      );
+
+      _lastSyncedLuckyBagCount = target;
+
+      // 로컬 캐시도 함께 갱신 (표시/복구 보조용, 권위는 서버 유지)
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('luckyBagCount', target);
+
+      print('✅ luckyBagCount 서버 저장 완료: $target');
+    } catch (e) {
+      print('⚠️ luckyBagCount 서버 저장 실패(시도 ${attempt + 1}): $e');
+      // 네트워크 오류 등 → 지수 백오프로 재시도 (최대 3회)
+      if (attempt < 3) {
+        _isSavingBag = false;
+        await Future.delayed(Duration(milliseconds: 800 * (attempt + 1)));
+        return _flushLuckyBagToServer(attempt: attempt + 1);
+      }
+      // 최종 실패: _lastSyncedLuckyBagCount를 갱신하지 않아 다음 기회에 다시 시도됨
+      _scheduleLuckyBagServerSave();
+    } finally {
+      _isSavingBag = false;
+    }
+  }
+
+  /// 🚪 게임 화면 이탈 시 luckyBagCount를 서버에 저장
+  /// (뒤로가기, 홈버튼, 앱 종료 등) - 대기 중인 디바운스 저장까지 즉시 반영
+  Future<void> saveLuckyBagCountOnExit() async {
+    await flushPendingLuckyBagSave();
   }
 
   Future<void> _initialize() async {
@@ -1072,6 +1296,7 @@ class GameNotifier extends StateNotifier<GameState> {
 
       if (user != null) {
         savedLuckyBagCount = user.luckyBagCount;
+        _lastSyncedLuckyBagCount = user.luckyBagCount; // 📦 서버 반영 기준값 초기화
         savedRewardRefillCount = user.rewardRefillCount;
         savedCachedMoney = user.money;
         serverResetVersion = user.resetVersion;
@@ -1579,6 +1804,8 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   void dropInitialCoins(int count) {
+    // 🎉 오늘 종료 상태여도 상자(luckyBagCount)에 남은 동전은 끝까지 사용 가능
+    // (새 동전이 들어오는 '지갑 리필'만 차단됨)
     if (state.luckyBagCount <= 0 || !state.isInitialized) return;
 
     int coinsToDrop = min(count, state.luckyBagCount);
@@ -1626,6 +1853,7 @@ class GameNotifier extends StateNotifier<GameState> {
       );
       _updateRefillButtonStates();
       _saveGameStateToPrefs();
+      _scheduleLuckyBagServerSave(); // 📦 소비분 서버 반영 예약 (디바운스)
 
       for (final coin in newCoinsBatch) {
         onStartDropAnimation?.call(coin);
@@ -1784,6 +2012,7 @@ class GameNotifier extends StateNotifier<GameState> {
       );
 
       // 2. 바닥에 코인이 _maxFloorCoins개 미만이고 주머니에 코인이 있으면 추가 드롭
+      // 🎉 종료 상태여도 상자에 남은 동전은 계속 보충됨 (상자가 비면 자연스럽게 멈춤)
       if (updatedCoins.length < _maxFloorCoins && state.luckyBagCount > 0) {
         final coinsToAdd = min(_maxFloorCoins - updatedCoins.length, state.luckyBagCount);
         List<Coin> newCoinsToAdd = [];
@@ -1805,6 +2034,7 @@ class GameNotifier extends StateNotifier<GameState> {
             floorCoins: [...updatedCoins, ...newCoinsToAdd],
             luckyBagCount: state.luckyBagCount - newCoinsToAdd.length,
           );
+          _scheduleLuckyBagServerSave(); // 📦 소비분 서버 반영 예약 (디바운스)
 
           // 새 코인들의 드롭 애니메이션 시작
           for (final coin in newCoinsToAdd) {
@@ -2128,6 +2358,23 @@ class GameNotifier extends StateNotifier<GameState> {
   void dispose() {
     print('💾 GameNotifier 종료 - 최종 데이터 저장 시작');
 
+    // 📦 [최후 보루] 미저장 상자 동전이 남아 있으면 dispose 플래그를 세우기 전에 저장을 발사한다.
+    // (정상 경로는 이탈/생명주기에서 await 저장이지만, 예외 경로 대비)
+    try {
+      final pendingBag = state.luckyBagCount;
+      if (!state.hasLoadError && _lastSyncedLuckyBagCount != pendingBag) {
+        _bagSaveDebounceTimer?.cancel();
+        _ref.read(userRepositoryProvider).addEarning(
+              amount: 0,
+              luckyBagCount: pendingBag,
+              source: 'moneyTalk',
+            );
+        print('📦 dispose 시 미저장 상자 동전 서버 반영 시도: $pendingBag');
+      }
+    } catch (e) {
+      print('📦 dispose 시 상자 동전 저장 시도 실패: $e');
+    }
+
     // 🧲 자석 발동 중 화면 이탈 시: 별도 기록 불필요.
     // 발동 시점에 저장한 종료 시각(시작+30초)이 그대로 유지되어, 재진입 시 남은 시간만큼
     // 자석이 재개되고(_loadMagnetBuffState) 쿨타임도 그 종료 시각 기준으로 돌아 악용 불가.
@@ -2193,6 +2440,13 @@ class GameNotifier extends StateNotifier<GameState> {
       _saveDebounceTimer = null;
     } catch (e) {
       print('저장 디바운스 타이머 dispose 에러: $e');
+    }
+
+    try {
+      _bagSaveDebounceTimer?.cancel();
+      _bagSaveDebounceTimer = null;
+    } catch (e) {
+      print('상자 동전 저장 디바운스 타이머 dispose 에러: $e');
     }
 
     try {
@@ -2710,6 +2964,12 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   void _executeRefillWithAmount(int coinAmount) async {
+    // 🎉 오늘 종료 상태면 리필 불가
+    if (cycleSystemEnabled && state.isMoneyTalkFinished) {
+      print('🎉 오늘 머니톡톡을 마쳐 리필할 수 없습니다');
+      _isRefilling = false;
+      return;
+    }
     if (state.rewardRefillCount <= 0) {
       print('리필 횟수가 없어 리필할 수 없습니다.');
       _isRefilling = false; // 리필 불가능시 플래그 해제
@@ -2850,6 +3110,9 @@ class GameNotifier extends StateNotifier<GameState> {
     // 🔓 리필 작업 완료 - 플래그 해제
     _isRefilling = false;
     print('🔓 리필 작업 완료 - 서버 동기화 허용');
+
+    // 🎉 사이클 완주 체크 (15/30/45회차 도달 시 모달)
+    await _checkCycleComplete();
   }
 }
 

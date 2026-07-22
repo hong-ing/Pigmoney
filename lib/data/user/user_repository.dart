@@ -365,6 +365,35 @@ class UserRepository {
     }
   }
 
+  /// 오늘(새벽 5시 기준 게임 날짜) 적립 합계 조회 - 사이클 완주 모달 표시용
+  /// 실패하거나 문서가 없으면 null (호출부에서 해당 줄을 생략)
+  /// 오늘(게임 날짜 기준) 적립 합계 조회
+  /// [source]를 주면 해당 출처만(bySource.{source}), 없으면 전체 합계(total)
+  Future<int?> getTodayTotalEarnings({String? source}) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return null;
+
+      // addEarning과 동일한 게임 날짜 계산 (KST 기준, 새벽 5시 경계)
+      final kstNow = DateTime.now().toUtc().add(const Duration(hours: 9));
+      final gameDate = kstNow.hour < 5 ? kstNow.subtract(const Duration(days: 1)) : kstNow;
+      final dateKey = DateFormat('yyyy-MM-dd').format(gameDate);
+
+      final doc = await _firestore.doc('users/${user.uid}/daily/$dateKey').get();
+      if (!doc.exists) return null;
+
+      // source가 지정되면 bySource.{source} 값만, 아니면 전체 합계(total)
+      if (source != null) {
+        final bySource = doc.data()?['bySource'] as Map<String, dynamic>?;
+        return (bySource?[source] as num?)?.toInt();
+      }
+      return (doc.data()?['total'] as num?)?.toInt();
+    } catch (e) {
+      logger.e('오늘 적립 합계 조회 오류: $e');
+      return null;
+    }
+  }
+
   Future<void> purchaseProduct({required int amount}) async {
     try {
       final user = _auth.currentUser;

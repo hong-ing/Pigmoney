@@ -218,7 +218,8 @@ class _ProductBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    // 🐛 작은 화면/키보드 대응: 내용이 넘치면 스크롤되도록 처리
+    return SingleChildScrollView(
       padding: const EdgeInsets.only(right: 35, left: 35, top: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

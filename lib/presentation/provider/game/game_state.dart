@@ -59,6 +59,10 @@ class GameState {
   // 💣 폭탄 버프 관련 상태
   final int bombGaugeRemaining; // 폭탄 게이지 (100에서 시작, 동전 적립마다 -1, 0이면 발동 가능)
 
+  // 🎉 오늘 머니톡톡 종료 여부 (사이클 완주 후 '오늘은 여기까지' 선택)
+  // true면 동전 미배출 + 리필 불가. 단 저금통(tempMoney) 수령은 계속 가능.
+  final bool isMoneyTalkFinished;
+
   final Rect gameArea;
   final Rect piggyBankRect;
   final Rect leftUIRect;
@@ -119,6 +123,9 @@ class GameState {
 
     // 💣 폭탄 버프 초기값
     this.bombGaugeRemaining = 100,
+
+    // 🎉 머니톡톡 종료 초기값
+    this.isMoneyTalkFinished = false,
 
     this.gameArea = Rect.zero,
     this.piggyBankRect = Rect.zero,
@@ -188,6 +195,9 @@ class GameState {
     // 💣 폭탄 버프 관련 변수
     int? bombGaugeRemaining,
 
+    // 🎉 머니톡톡 종료 여부
+    bool? isMoneyTalkFinished,
+
     Rect? gameArea,
     Rect? piggyBankRect,
     Rect? leftUIRect,
@@ -248,6 +258,9 @@ class GameState {
 
       // 💣 폭탄 버프 관련 변수
       bombGaugeRemaining: bombGaugeRemaining ?? this.bombGaugeRemaining,
+
+      // 🎉 머니톡톡 종료 여부
+      isMoneyTalkFinished: isMoneyTalkFinished ?? this.isMoneyTalkFinished,
 
       gameArea: gameArea ?? this.gameArea,
       piggyBankRect: piggyBankRect ?? this.piggyBankRect,
