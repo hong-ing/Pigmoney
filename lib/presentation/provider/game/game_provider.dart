@@ -331,8 +331,10 @@ class GameNotifier extends StateNotifier<GameState> {
       // 🛡️ sessionResetVersion이 null이면 '아직 로드 전'이라는 뜻이므로 리셋으로 오판하지 않는다.
       //    (노티파이어 재생성 직후 동기화가 먼저 도는 경우 세션 진행분이 날아가는 것 방지)
       if (state.sessionResetVersion == null) {
-        print('🛡️ 세션 리셋버전 미설정 - 리셋 판정 보류하고 버전만 반영');
-        state = state.copyWith(sessionResetVersion: user.resetVersion);
+        // 🛡️ [수정] 세션 버전을 선점하지 않는다.
+        //    (선점하면 로드/_checkServerResetOnceOnInit의 실제 리셋 적용이 스킵되어
+        //     진짜 일일 리셋을 놓칠 수 있음 → 리셋 판정/버전 갱신은 로드 경로에 위임)
+        print('🛡️ 세션 리셋버전 미설정 - 동기화에서는 리셋 판정/버전 선점 보류 (로드 경로가 처리)');
       } else if (state.sessionResetVersion != user.resetVersion) {
         // 새로운 리셋이 발생한 경우 - 서버 데이터로 완전히 초기화
         print('🌅 새로운 리셋 감지 - 서버 데이터로 초기화');
@@ -1135,6 +1137,16 @@ class GameNotifier extends StateNotifier<GameState> {
     if (state.hasLoadError) return; // 로드 실패 상태에서는 저장 방지 (서버 값 훼손 방지)
     if (_isSavingBag) return; // 이미 저장 중이면 그 저장이 최신 값을 반영함
 
+    // 🛡️ [리셋 가드] 서버 resetVersion이 클라가 반영한 세션 버전보다 최신이면
+    //    = 일일 리셋이 아직 로컬에 반영되지 않은 상태이므로, 낡은 로컬 상자값으로
+    //    리셋된 서버값(200)을 덮어쓰지 않도록 저장을 보류한다. (리셋 반영 후 재개)
+    final resetGuardUser = _ref.read(currentUserProvider);
+    if (resetGuardUser != null &&
+        state.sessionResetVersion != resetGuardUser.resetVersion) {
+      print('📦 리셋 미반영 상태(세션=${state.sessionResetVersion}, 서버=${resetGuardUser.resetVersion}) - 상자 저장 보류(덮어쓰기 방지)');
+      return;
+    }
+
     final int target = state.luckyBagCount;
 
     // 서버에 이미 반영된 값과 동일하면 쓰기 생략
@@ -1413,9 +1425,16 @@ class GameNotifier extends StateNotifier<GameState> {
         print('🔧 재설치/재로그인 감지 - 오늘($serverResetVersion) 리필 시드 승격 봉인');
       }
 
+      // ✅ [수정] 서버 리셋 여부를 먼저 판정 (리필 변경 처리보다 우선)
+      // 진짜 일일 리셋에서는 refill도 항상 바뀌므로, 리셋을 리필변경보다 우선 처리해야
+      // 리셋 분기(localResetVersion 갱신 + 상자값 반영)가 스킵되지 않는다.
+      final bool isServerResetDetected = localResetVersion != serverResetVersion;
+      bool resetAppliedInLoad = false;
+
       // ✅ 서버에서 rewardRefillCount를 수동으로 변경했는지 체크
+      // 단, 서버 리셋인 경우는 아래 리셋 분기에서 통합 처리하므로 여기서는 제외
       bool isRefillCountChanged = localRewardRefillCount != savedRewardRefillCount;
-      if (isRefillCountChanged) {
+      if (isRefillCountChanged && !isServerResetDetected) {
         print('🔧 서버 rewardRefillCount 변경 감지: 로컬($localRewardRefillCount) → 서버($savedRewardRefillCount)');
 
         // 서버의 새로운 회차 계산
@@ -1443,10 +1462,9 @@ class GameNotifier extends StateNotifier<GameState> {
         print('🔧 서버 rewardRefillCount 변경 처리 완료');
       }
 
-      // 3. ✅ 서버 리셋 체크 (코인/리필/머니만 영향)
-      bool isServerResetDetected = localResetVersion != serverResetVersion;
-
-      if (isServerResetDetected && !isRefillCountChanged) {
+      // 3. ✅ [수정] 서버 리셋 반영 - refill 변경 여부와 무관하게 항상 적용
+      if (isServerResetDetected) {
+        resetAppliedInLoad = true;
         print('🌅 서버 리셋 감지: 로컬($localResetVersion) vs 서버($serverResetVersion)');
         print('🌅 서버 데이터로 완전 리셋: 상자=${savedLuckyBagCount}, 리필=${savedRewardRefillCount}');
 
@@ -1602,7 +1620,9 @@ class GameNotifier extends StateNotifier<GameState> {
         isAutoEarnDoubleSpeed: isAutoEarnDoubleSpeed,
         lastClaimedDate: lastClaimedDate,
         didInitCoins: savedDidInitCoins,
-        sessionResetVersion: serverResetVersion,
+        // 🛡️ [수정] 리셋을 실제로 적용했거나 이미 동기 상태일 때만 세션 버전 갱신.
+        //    미적용인데 선점하면 _checkServerResetOnceOnInit이 안전 리셋(_performGameResetOnInit)을 스킵함.
+        sessionResetVersion: (!isServerResetDetected || resetAppliedInLoad) ? serverResetVersion : state.sessionResetVersion,
         gameStartTime: gameStartTime, // ✅ 추가: 게임 시작 시간
       );
 
@@ -2362,7 +2382,11 @@ class GameNotifier extends StateNotifier<GameState> {
     // (정상 경로는 이탈/생명주기에서 await 저장이지만, 예외 경로 대비)
     try {
       final pendingBag = state.luckyBagCount;
-      if (!state.hasLoadError && _lastSyncedLuckyBagCount != pendingBag) {
+      // 🛡️ [리셋 가드] 서버 리셋이 아직 로컬에 반영 안 된 상태면 저장하지 않는다
+      //    (낡은 상자값으로 리셋된 서버값 200을 덮어쓰는 것 방지)
+      final disposeUser = _ref.read(currentUserProvider);
+      final bool resetPending = disposeUser != null && state.sessionResetVersion != disposeUser.resetVersion;
+      if (!state.hasLoadError && !resetPending && _lastSyncedLuckyBagCount != pendingBag) {
         _bagSaveDebounceTimer?.cancel();
         _ref.read(userRepositoryProvider).addEarning(
               amount: 0,
@@ -2370,6 +2394,8 @@ class GameNotifier extends StateNotifier<GameState> {
               source: 'moneyTalk',
             );
         print('📦 dispose 시 미저장 상자 동전 서버 반영 시도: $pendingBag');
+      } else if (resetPending) {
+        print('📦 dispose 시 리셋 미반영 상태 - 상자 저장 보류(덮어쓰기 방지)');
       }
     } catch (e) {
       print('📦 dispose 시 상자 동전 저장 시도 실패: $e');
