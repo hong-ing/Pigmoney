@@ -2320,6 +2320,19 @@ class GameNotifier extends StateNotifier<GameState> {
     }
   }
 
+  /// 🎉 사이클 완주 보상(10,000M) 획득 효과음
+  /// 기존 출석 보상음(coin_attendance_sound)을 재사용해 '보상 획득' 느낌을 준다.
+  /// (deposit 플레이어 재사용 - 완주 시점엔 동전 적립음이 울릴 일이 없어 충돌 없음)
+  void playCycleBonusSound() async {
+    try {
+      final settings = _ref.read(settingsProvider);
+      if (!settings.isSfxEnabled) return;
+      await _depositPlayer.play(AssetSource('audio/coin_attendance_sound.mp3'));
+    } catch (e) {
+      print('🎉 완주 보상 효과음 재생 실패: $e');
+    }
+  }
+
   void playRefillSound() async {
     if (_isRefillSoundPlaying) return;
     _isRefillSoundPlaying = true;

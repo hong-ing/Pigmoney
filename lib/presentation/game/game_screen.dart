@@ -493,15 +493,44 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
     final bonusGiven = await notifier.finishTodayMoneyTalk();
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(bonusGiven ? '완주 보상 10,000 M가 지급되었습니다!' : '오늘 머니톡톡을 마쳤습니다.'),
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    if (bonusGiven) {
+      // 1) 보상 획득 효과음
+      notifier.playCycleBonusSound();
+      // 2) 상단 머니바 슬롯머신 롤업 트리거 (서버 반영값 재조회 → CashDisplay가 촤르륵 올라감)
+      ref.read(currentUserProvider.notifier).fetchCurrentUser(forceRefresh: true);
+      // 3) '+10,000 M' 버스트 연출 (숫자 촤르륵 + 크게 떴다 사라짐) - 끝날 때까지 대기 후 홈 이동
+      await _showCycleBonusBurst();
+    } else {
+      // 이미 오늘 보상을 받은 경우 등: 간단 안내만
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('오늘 머니톡톡을 마쳤습니다.'), duration: Duration(seconds: 2)),
+      );
+      await Future.delayed(const Duration(milliseconds: 400));
+    }
 
+    if (!mounted) return;
     // 홈 화면으로 이동
     Navigator.of(context).pop();
+  }
+
+  // 🎉 완주 보상 '+10,000 M' 버스트 오버레이 표시 (연출이 끝날 때까지 await)
+  Future<void> _showCycleBonusBurst() async {
+    if (!mounted) return;
+    final overlay = Overlay.of(context);
+    final completer = Completer<void>();
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (_) => _CycleBonusBurst(
+        amount: 10000,
+        onDone: () {
+          if (!completer.isCompleted) completer.complete();
+        },
+      ),
+    );
+    overlay.insert(entry);
+    await completer.future;
+    await Future.delayed(const Duration(milliseconds: 150)); // 사라진 뒤 약간의 여운
+    entry.remove();
   }
 
   // 💣 폭탄 발동 시 화면 플래시 효과용 (0.0 = 안 보임)
@@ -1468,6 +1497,115 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
           ),
         );
       },
+    );
+  }
+}
+
+/// 🎉 사이클 완주 보상 '+N M' 버스트 오버레이
+/// 숫자가 0 → amount로 촤르륵 올라가며(슬롯머신), 팝업처럼 커졌다가 마지막에 페이드아웃.
+/// 애니메이션이 끝나면 [onDone] 콜백을 호출한다.
+class _CycleBonusBurst extends StatefulWidget {
+  final int amount;
+  final VoidCallback onDone;
+  const _CycleBonusBurst({required this.amount, required this.onDone});
+
+  @override
+  State<_CycleBonusBurst> createState() => _CycleBonusBurstState();
+}
+
+class _CycleBonusBurstState extends State<_CycleBonusBurst> with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+  late final Animation<double> _count; // 0~1 (숫자 롤업 진행도)
+  late final Animation<double> _scale; // 팝업 스케일
+  late final Animation<double> _opacity; // 등장/유지/사라짐
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(duration: const Duration(milliseconds: 1800), vsync: this);
+
+    // 숫자 롤업: 0~55% 구간에서 0→amount (슬롯머신 느낌: easeOutExpo)
+    _count = CurvedAnimation(
+      parent: _c,
+      curve: const Interval(0.0, 0.55, curve: Curves.easeOutExpo),
+    );
+
+    // 팝업 스케일: 커졌다가(1.08) 살짝 되돌아옴(1.0)
+    _scale = TweenSequence<double>([
+      TweenSequenceItem(
+        tween: Tween(begin: 0.5, end: 1.08).chain(CurveTween(curve: Curves.easeOutBack)),
+        weight: 25,
+      ),
+      TweenSequenceItem(tween: Tween(begin: 1.08, end: 1.0), weight: 15),
+      TweenSequenceItem(tween: ConstantTween(1.0), weight: 60),
+    ]).animate(_c);
+
+    // 투명도: 12% 페이드인 → 66% 유지 → 22% 페이드아웃
+    _opacity = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 12),
+      TweenSequenceItem(tween: ConstantTween(1.0), weight: 66),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 22),
+    ]).animate(_c);
+
+    _c.forward().whenComplete(widget.onDone);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: AnimatedBuilder(
+          animation: _c,
+          builder: (context, _) {
+            final n = (widget.amount * _count.value).round();
+            final formatted = NumberFormat('#,###').format(n);
+            return Center(
+              child: Opacity(
+                opacity: _opacity.value.clamp(0.0, 1.0),
+                child: Transform.scale(
+                  scale: _scale.value,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.82),
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(color: Colors.amber.shade300, width: 2),
+                      boxShadow: [
+                        BoxShadow(color: Colors.amber.withOpacity(0.35), blurRadius: 24, spreadRadius: 2),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          '🎉 완주 보상',
+                          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: -0.2),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '+$formatted M',
+                          style: TextStyle(
+                            color: Colors.amber.shade300,
+                            fontSize: 42,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 }
