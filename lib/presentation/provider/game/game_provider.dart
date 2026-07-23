@@ -1258,6 +1258,15 @@ class GameNotifier extends StateNotifier<GameState> {
       if (mounted) {
         state = state.copyWith(isLoading: false);
       }
+
+      // 🎉 게임 진입 시 사이클 완주 모달 재확인 (리필 외 경로 보강)
+      //   리필 완료 직후에만 체크하면, 아래 경우 모달이 영영 안 뜬다:
+      //   ① 서버 rewardRefillCount 수동 변경으로 회차가 15/30/45로 점프한 경우(테스트 포함)
+      //   ② 리필 완료 후 완주 체크 전에 앱이 백그라운드로 가 체크가 유실된 경우
+      //      (다음 리필은 이미 16회차를 보므로 15회차 모달은 재시도되지 않음)
+      //   → 진입 시 현재 회차가 완주 회차이고 오늘 미표시면 여기서 띄운다.
+      //     (콜백은 game_screen initState에서 이미 연결됨. 미연결이면 _checkCycleComplete가 보류)
+      await _checkCycleComplete();
     } catch (e) {
       print('게임 초기화 오류: $e');
       if (mounted) {
@@ -2527,14 +2536,18 @@ class GameNotifier extends StateNotifier<GameState> {
 
   double _calculateFillSpeed(int refillCount) {
     // 현재 회차 = 51 - 남은 횟수 (50/50에서 시작하므로 첫 번째 리필이 1회차)
-    // 1회차: 즉시 리필(0), 2회차: 0.2초당 +1, 3회차: 0.5초당 +1,
-    // 4회차부터: (회차-3)초당 +1, [3] 23회차(20초) 이후로는 20초당 +1로 상한 고정
+    // [3] 충전 속도(N초당 +1) 곡선 — 사이클 단위로 재설정
+    //  · 1사이클(1~15): 1회차 0초, 2회차 0.2, 3회차 0.5, 4회차부터 (회차-3)초 → 15회차 12초
+    //  · 2사이클(16~30): (회차-10)초 → 16회차 6초, 17회차 7초 ... 30회차 20초
+    //    (개수 적은 사이클 초반 대기시간 완화 + 30회차에서 정확히 20초 도달 → 3사이클 진입 매끄럽게)
+    //  · 3사이클 이후(31~) 및 순환 구간(31~45 반복): 20초 고정
     int currentRound = _maxRefillCount - refillCount;
     if (currentRound <= 1) return 0.0; // 즉시 리필
     if (currentRound == 2) return 0.2;
     if (currentRound == 3) return 0.5;
-    final seconds = currentRound - 3;
-    return seconds >= 20 ? 20.0 : seconds.toDouble();
+    if (currentRound <= 15) return (currentRound - 3).toDouble(); // 1사이클: 4회차 1초 ~ 15회차 12초
+    if (currentRound <= 30) return (currentRound - 10).toDouble(); // 2사이클: 16회차 6초 ~ 30회차 20초
+    return 20.0; // 3사이클 이후 & 순환 구간: 20초 고정
   }
 
   int _calculateMaxCoins(int refillCount) {
