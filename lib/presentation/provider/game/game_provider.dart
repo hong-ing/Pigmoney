@@ -65,6 +65,11 @@ class GameNotifier extends StateNotifier<GameState> {
   // 🪙 바닥에 항상 유지되는 동전 개수
   static const int _maxFloorCoins = 10;
 
+  // 🌅 로드 경로(_loadGameStateFromPrefs)에서 일일 리셋이 적용됐는지 표시.
+  //    앱 재실행 리셋은 _checkServerResetOnceOnInit을 타지 않아(세션=서버) 폭탄 게이지가 남으므로,
+  //    _initialize에서 이 플래그를 보고 폭탄 게이지를 마저 초기화한다.
+  bool _dailyResetAppliedInLoad = false;
+
   // BGM은 BgmService 싱글톤에서 관리 (화면 전환 시에도 재생 위치 유지)
   final AudioPlayer _depositPlayer = AudioPlayer();
   final AudioCache _sfxCoinCache = AudioCache(prefix: 'audio/');
@@ -1246,6 +1251,25 @@ class GameNotifier extends StateNotifier<GameState> {
       // mounted 체크
       if (!mounted) return;
 
+      // 💣 앱 재실행 경로에서 일일 리셋이 적용된 경우 폭탄 게이지도 초기화한다.
+      //    (이 경로는 로드가 세션=서버로 맞춰버려 _checkServerResetOnceOnInit이 스킵되고,
+      //     _loadBombBuffState는 전날 값을 복원하므로 여기서 확실히 덮어쓴다)
+      if (_dailyResetAppliedInLoad) {
+        _dailyResetAppliedInLoad = false;
+        if (bombBuffEnabled && state.bombGaugeRemaining != _bombGaugeMax) {
+          state = state.copyWith(bombGaugeRemaining: _bombGaugeMax);
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setInt(_bombGaugeKey, _bombGaugeMax);
+          } catch (e) {
+            print('💣 폭탄 게이지 리셋 저장 실패: $e');
+          }
+          print('💣 일일 리셋(앱 재실행 경로) - 폭탄 게이지 $_bombGaugeMax로 초기화');
+        }
+      }
+
+      if (!mounted) return;
+
       // 설정에 따라 배경음악 재생
       final settings = _ref.read(settingsProvider);
       if (settings.isBgmEnabled) {
@@ -1486,6 +1510,8 @@ class GameNotifier extends StateNotifier<GameState> {
       // 3. ✅ [수정] 서버 리셋 반영 - refill 변경 여부와 무관하게 항상 적용
       if (isServerResetDetected) {
         resetAppliedInLoad = true;
+        // 💣 이 경로(앱 재실행)로 리셋된 경우 _initialize에서 폭탄 게이지도 초기화하도록 표시
+        _dailyResetAppliedInLoad = true;
         print('🌅 서버 리셋 감지: 로컬($localResetVersion) vs 서버($serverResetVersion)');
         print('🌅 서버 데이터로 완전 리셋: 상자=${savedLuckyBagCount}, 리필=${savedRewardRefillCount}');
 
@@ -2728,6 +2754,36 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   /// 📅 게임 화면 진입 시 한 번만 서버 리셋 체크 (효율적인 방식)
+  /// 🌅 백그라운드 → 포그라운드 복귀 / 머니톡톡 화면 재진입 시 일일 리셋 확인
+  ///
+  /// 앱을 종료하지 않고 새벽 5시를 넘긴 경우, 노티파이어가 살아있어 _initialize가 다시 돌지 않는다.
+  /// 그래서 서버 값만 반영되고 바닥 동전·폭탄 게이지 등 게임 상태는 전날 것이 남는 문제가 있었다.
+  ///
+  /// 판정은 기존 로직(_checkServerResetOnceOnInit: 서버 resetVersion vs sessionResetVersion)을
+  /// 그대로 재사용한다. 백그라운드 동안 서버 값이 바뀌었을 수 있으므로 판정 전에 유저 정보만 새로고침한다.
+  /// 리셋이 아니면 _checkServerResetOnceOnInit이 아무 일도 하지 않으므로,
+  /// 평상시 복귀에서 바닥 동전/상자가 초기화되는 일은 없다.
+  Future<void> checkDailyResetOnResume() async {
+    try {
+      if (_isDisposed || _isNotifierDisposed) return;
+      if (state.hasLoadError) return; // 로드 실패 상태에서는 건드리지 않음
+      // 리필/저장 진행 중에는 상태를 흔들지 않는다 (기존 가드와 동일한 취지)
+      if (_isRefilling || _isSaving) {
+        print('🌅 복귀 리셋 체크 - 리필/저장 중이라 건너뜀');
+        return;
+      }
+
+      // 최신 서버 resetVersion 확보 (백그라운드 동안 05시를 넘겼을 수 있음)
+      await _ref.read(currentUserProvider.notifier).refreshUserData();
+      if (_isDisposed || _isNotifierDisposed) return;
+
+      // 기존 판정 + 적용 경로 재사용 (리셋이 아니면 no-op)
+      await _checkServerResetOnceOnInit();
+    } catch (e) {
+      print('🌅 복귀 시 일일 리셋 체크 오류: $e');
+    }
+  }
+
   Future<void> _checkServerResetOnceOnInit() async {
     try {
       // 현재 사용자 정보에서 서버 리셋 버전 확인
@@ -2795,8 +2851,44 @@ class GameNotifier extends StateNotifier<GameState> {
       didInitCoins: false,
     );
 
+    // 🌅 일일 리셋 시 함께 초기화되어야 하는 게임 상태들
+    //   앱을 완전 종료 후 재실행하는 경로에서는 생성자(_loadBombBuffState 등)와
+    //   setLayoutParams(바닥 동전 초기 배치)가 대신 처리해 준다. 그러나 백그라운드 복귀처럼
+    //   노티파이어가 살아있는 경로에서는 그 경로를 타지 않으므로 여기서 직접 맞춰줘야 한다.
+
+    // 💣 폭탄 게이지: 전날 잔량이 남지 않도록 최대치로 리셋
+    if (bombBuffEnabled && state.bombGaugeRemaining != _bombGaugeMax) {
+      state = state.copyWith(bombGaugeRemaining: _bombGaugeMax);
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt(_bombGaugeKey, _bombGaugeMax);
+      } catch (e) {
+        print('💣 폭탄 게이지 리셋 저장 실패: $e');
+      }
+      print('💣 일일 리셋 - 폭탄 게이지 $_bombGaugeMax로 초기화');
+    }
+
+    // 🎉 '오늘 머니톡톡 종료' 해제 (게임 날짜가 바뀌었으므로 다시 플레이 가능)
+    if (state.isMoneyTalkFinished) {
+      state = state.copyWith(isMoneyTalkFinished: false);
+      print('🎉 일일 리셋 - 오늘 종료 상태 해제');
+    }
+
     // 로컬 저장소에 리셋된 상태 저장
     await _saveGameStateToPrefs();
+
+    // 🪙 바닥 동전 재배치: 전날 동전을 걷어내고 초기 배치를 새로 뿌린다.
+    //   최초 실행(아직 레이아웃 전)에는 isInitialized=false라 여기서 건너뛰고,
+    //   뒤이어 호출되는 setLayoutParams가 didInitCoins=false를 보고 배치한다.
+    if (state.isInitialized) {
+      for (final coin in state.floorCoins) {
+        coin.dispose(); // 진행 중이던 애니메이션 컨트롤러 정리
+      }
+      state = state.copyWith(floorCoins: [], didInitCoins: false);
+      // 내부에서 상자 차감 + 로컬 저장 + 서버 반영 예약까지 처리
+      dropInitialCoins(_maxFloorCoins);
+      print('🪙 일일 리셋 - 바닥 동전 재배치 (상자=${state.luckyBagCount})');
+    }
 
     // 버튼 상태 업데이트
     _updateRefillButtonStates();

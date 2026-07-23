@@ -120,6 +120,13 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
     // ✅ 게임 화면 진입 시 강제로 모든 provider 새로고침하여 최신 데이터 확보
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeGameLayout();
+
+      // 🌅 화면 재진입 시에도 일일 리셋 확인
+      //   (노티파이어가 살아있어 _initialize를 다시 타지 않는 경우 대비)
+      //   최초 로드 중이면 _initialize가 직접 리셋 체크를 수행하므로 건너뛴다 (중복/경합 방지)
+      if (!ref.read(gameProvider).isLoading) {
+        ref.read(gameProvider.notifier).checkDailyResetOnResume();
+      }
     });
   }
 
@@ -1034,6 +1041,10 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
 
       // 오디오 재개
       gameNotifier.resumeBackgroundMusic();
+
+      // 🌅 백그라운드에서 새벽 5시를 넘긴 경우 일일 리셋 적용
+      //   (리셋이 아니면 내부에서 no-op → 평상시 복귀에는 영향 없음)
+      await gameNotifier.checkDailyResetOnResume();
 
       // 확실한 데이터 새로고침
       // _forceRefreshAllProvidersAndGame();
