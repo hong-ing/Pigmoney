@@ -193,7 +193,7 @@ class _RightRefillButtonState extends ConsumerState<RightRefillButton> {
     );
   }
 
-  /// 💰 리필 옵션 다이얼로그 (홀수 회차: 광고 없음, 짝수 회차: 전면광고)
+  /// 💰 리필 옵션 다이얼로그 ([4] 사이클 내 순서로 광고 판정: GameNotifier.isInterstitialRound)
   void _showRefillOptionsDialog(BuildContext context, WidgetRef ref, int currentRound, int maxCoins) {
     // 현재 차있는 동전 수 가져오기
     final currentCoins = ref.read(gameProvider.select((s) => s.currentCoins));
@@ -293,16 +293,16 @@ class _RightRefillButtonState extends ConsumerState<RightRefillButton> {
     });
   }
 
-  /// 💰 리필 실행 (홀수 회차: 짧은 로딩만, 짝수 회차: 로딩 + 전면광고)
+  /// 💰 리필 실행 ([4] 사이클 내 순서 기준: 1·2번째 광고 없음, 3번째부터 격회로 전면광고)
   void _startRefill(WidgetRef ref, int currentRound) {
     // ✅ 다이얼로그 닫힐 때 resumeFillTimer() 호출 방지 (provider에서 타이머 관리)
     _skipResumeOnClose = true;
 
-    if (currentRound % 2 == 0) {
-      // 짝수 회차 (2,4,6,...,50): 로딩 + 1초 시점 전면광고
+    if (GameNotifier.isInterstitialRound(currentRound)) {
+      // 사이클 내 3,5,7,9,11,13,15번째: 로딩 + 1초 시점 전면광고
       ref.read(gameProvider.notifier).handleRightRefillWithInterstitialForRound(currentRound);
     } else {
-      // 홀수 회차 (1,3,5,...,49): 광고 없이 짧은 로딩 후 리필
+      // 사이클 내 1,2,4,6,8,10,12,14번째: 광고 없이 짧은 로딩 후 리필
       ref.read(gameProvider.notifier).handleRightRefillWithoutAd();
     }
   }

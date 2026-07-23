@@ -329,8 +329,9 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
         continueLabel = '3사이클 도전!';
         break;
       default:
-        body = '오늘 정말 열심히 하셨어요.\n마지막 안내예요!\n좋아요, 어디 한번 갈 때까지 가보죠!';
-        continueLabel = '갈 때까지 가보기!';
+        // 3사이클(45회차): 이후로는 계속 반복되므로 '마음껏 하라'는 뉘앙스
+        body = '여기까지 오셨다니 정말 대단해요!\n이제 더 묻지 않을게요.\n원하는 만큼 실컷 즐기세요 😎';
+        continueLabel = '계속 달린다!';
     }
 
     showDialog(
@@ -1029,7 +1030,7 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
     // 현재 회차 정보 가져오기 (50회 시스템: 현재 회차 = 51 - 남은 횟수)
     final refillCount = ref.read(gameProvider.select((s) => s.rewardRefillCount));
     final currentRound = 51 - refillCount;
-    final isOddRound = currentRound % 2 == 1; // 홀수 회차 = 광고 없음
+    final isOddRound = !GameNotifier.isInterstitialRound(currentRound); // 광고 없는 회차 = true
 
     showDialog(
       context: context,

@@ -173,18 +173,34 @@ class GameNotifier extends StateNotifier<GameState> {
   // 리필 50회 시스템: 현재 회차 = 51 - 남은 횟수
   final int _maxRefillCount = 51;
 
+  // 🎯 1사이클 = 15회. 리필 개수 / 확률밴드 / 광고 / 지갑 진행도가 모두 이 단위로 통일됨.
+  static const int cycleSize = 15;
+
   // [1] 무한 리필 순환 (끄려면 false로만 변경)
-  // 서버 시드(50)는 그대로 두고, 50회차(rewardRefillCount=1) 소진 시 41회차(=10)로 되돌려
-  // 41~60 확률밴드(금2%/은36%/동62%) · 20초당 +1 속도 · 짝수 회차 전면광고를 유지하며
-  // 계속 리필 가능하게 함. rewardRefillCount는 항상 1~50 범위라 서버 상한/리셋과 충돌 없음.
+  // 서버 시드(50)는 그대로 두고, 3사이클(31~45회차)을 무한 반복.
+  // 45회차 리필 시 46이 아니라 31회차(rewardRefillCount=20)로 되돌림.
+  // → 순환 구간은 항상 3사이클(금2%/은36%/동62%) · 20초당 +1 속도를 유지.
+  // rewardRefillCount는 항상 6~50 범위(round 31~45 ↔ count 20~6)라 서버 상한(50)/리셋과 충돌 없음.
   static const bool _refillCycleEnabled = true;
-  static const int _refillCycleRestoreCount = 10; // 순환 복귀 지점: round 41 = _maxRefillCount(51) - 10
+  static const int _cycleBandStart = 31; // 순환 구간 시작 회차
+  static const int _cycleBandEnd = 45; // 순환 구간 끝 회차 (다음은 31로 복귀)
 
   // 🎉 사이클 완주 시스템 스위치 (끄려면 false로만 변경)
   // 리필 회차 15/30/45 도달 시 완주 모달 → 보상 받고 종료 or 계속 진행
+  // (순환으로 45에 재도달해도 cycleShown 키가 이미 true라 3사이클까지만 표시됨)
   static const bool cycleSystemEnabled = true;
   static const List<int> _cycleRounds = [15, 30, 45]; // 사이클 완주 회차
   static const int _cycleBonusAmount = 10000; // 완주 보상 머니
+
+  /// 회차 → 사이클 내 순서(1~15). 1회차→1, 15회차→15, 16회차→1, 31회차→1 ...
+  static int cyclePositionOf(int round) => ((round - 1) % cycleSize) + 1;
+
+  /// [4] 전면광고 판정 — 사이클 내 순서 기준.
+  /// 1·2번째는 광고 없음, 3번째부터 격회(퐁당퐁당)로 광고: 사이클 내 3,5,7,9,11,13,15번째.
+  static bool isInterstitialRound(int round) {
+    final int pos = cyclePositionOf(round);
+    return pos >= 3 && pos.isOdd;
+  }
   static const String _cycleShownKeyPrefix = 'cycleShown_'; // + round_gameDate
   static const String _cycleBonusGivenKeyPrefix = 'cycleBonusGiven_'; // + gameDate
   static const String _moneyTalkFinishedDateKey = 'moneyTalkFinishedDate'; // 종료한 게임날짜
@@ -221,26 +237,22 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   Coin _generateRandomCoin(Offset position) {
-    // [4] 회차별 가변 확률 (1000분율). 회차 = _maxRefillCount - rewardRefillCount
+    // [2] 사이클(15회) 단위 가변 확률 (1000분율). 회차 = _maxRefillCount - rewardRefillCount
     // roll < goldMax → 금, roll < silverMax → 은, 그 이상 → 동
     final int round = _maxRefillCount - state.rewardRefillCount;
+    final int cycleNo = ((round - 1) ~/ cycleSize) + 1; // 1사이클→1, 2사이클→2, 3사이클 이후→3
     final int goldMax; // 금 경계 (1000분율)
     final int silverMax; // 은 경계 (금 다음 구간까지 누적)
-    if (round <= 20) {
+    if (cycleNo <= 1) {
       goldMax = 40; // 금 4%
       silverMax = 440; // 은 40% (40+400)  → 동 56%
-    } else if (round <= 40) {
+    } else if (cycleNo == 2) {
       goldMax = 30; // 금 3%
       silverMax = 410; // 은 38% (30+380)  → 동 59%
-    } else if (round <= 60) {
+    } else {
+      // 3사이클(31~45) 및 순환 구간 전체: 금2%/은36%/동62%로 고정
       goldMax = 20; // 금 2%
       silverMax = 380; // 은 36% (20+360)  → 동 62%
-    } else if (round <= 80) {
-      goldMax = 10; // 금 1%
-      silverMax = 350; // 은 34% (10+340)  → 동 65%
-    } else {
-      goldMax = 5; // 금 0.5%
-      silverMax = 305; // 은 30% (5+300)   → 동 69.5%
     }
 
     final int typeRoll = _random.nextInt(1000);
@@ -2526,8 +2538,11 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   int _calculateMaxCoins(int refillCount) {
-    // 모든 회차 동전 개수 50개 고정
-    return 50;
+    // [1] 사이클 내 순서(1~15)에 따라 10, 15, 20 ... 80 (5씩 증가). 사이클마다 리셋.
+    // 1회차=10, 15회차=80, 16회차=다시 10 ... 순환 구간(31~45)도 동일 패턴.
+    final int round = _maxRefillCount - refillCount;
+    final int pos = ((round - 1) % cycleSize) + 1; // 1~15
+    return 10 + (pos - 1) * 5; // pos1→10, pos15→80
   }
 
   // 🎯 백그라운드 도즈 모드 대응 - 시간 기반 코인 충전 시스템
@@ -3029,10 +3044,11 @@ class GameNotifier extends StateNotifier<GameState> {
 
     final currentRefillCount = state.rewardRefillCount;
     int remainingRefills = currentRefillCount - 1;
-    // [1] 무한 리필 순환: 50회차 소진(remaining=0) 시 종료 대신 41회차(=10)로 되돌림
-    // → 41~50 회차를 반복하며 금2%/20초/짝수광고 유지. 서버 시드(50)는 미변경.
-    if (_refillCycleEnabled && remainingRefills <= 0) {
-      remainingRefills = _refillCycleRestoreCount;
+    // [핵심] 무한 리필 순환: 45회차 리필 시 46이 아니라 31회차로 되돌림.
+    // → 3사이클(31~45)을 반복하며 금2%/20초/사이클 위치 기반 광고 유지. 서버 시드(50)는 미변경.
+    // (rewardRefillCount는 6~50 범위를 벗어나지 않아 서버 상한/리셋과 충돌 없음)
+    if (_refillCycleEnabled && (_maxRefillCount - remainingRefills) > _cycleBandEnd) {
+      remainingRefills = _maxRefillCount - _cycleBandStart; // round 31 = 51 - 20
     }
     final fillSpeed = _calculateFillSpeed(currentRefillCount);
 
