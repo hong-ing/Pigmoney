@@ -35,15 +35,33 @@ class Game2Notifier extends StateNotifier<Game2State> {
   // 🎯 크리티컬 시스템 스위치 (끄려면 false로만 변경)
   static const bool _game2CriticalEnabled = true;
   static const double _criticalChance = 0.05; // 5% 확률 (가끔 뜨지만 확 빠지는 방향)
-  static const int _criticalDamage = 10; // 크리티컬 시 내구도 감소량
+  static const int _criticalDamage = 10; // (구) 랜덤데미지 스위치 off 시 크리티컬 고정 데미지
+
+  // 🎯 [1] 큰 숫자 + 랜덤 데미지 체계 스위치 (끄려면 false로만 변경)
+  //   on이면: 레벨 내구도 ×20 + 일반 10~30 / 크리티컬 100~300 랜덤 데미지.
+  //   off이면: 기존 그대로(내구도 원본, 일반 -1 / 크리티컬 -10).
+  //   → 평균 터치 수는 두 경우 동일 (예: Lv1 = 1000/20 = 50번 = 50/1).
+  static const bool _game2RandomDamageEnabled = true;
+  static const int _durabilityMultiplier = 20; // 레벨 내구도 배율
+  static const int _normalDamageMin = 10; // 일반 터치 최소 데미지
+  static const int _normalDamageMax = 30; // 일반 터치 최대 데미지 (평균 20)
+  static const int _criticalDamageMin = 100; // 크리티컬 최소 데미지
+  static const int _criticalDamageMax = 300; // 크리티컬 최대 데미지 (평균 200, 일반의 10배)
 
   final Random _random = Random();
+
+  /// 레벨 원본 내구도 → 실제 적용 내구도 (스위치 on이면 ×20)
+  int _effectiveDurability(int baseDurability) =>
+      _game2RandomDamageEnabled ? baseDurability * _durabilityMultiplier : baseDurability;
 
   // 콜백 함수
   Function()? onPiggyBankBroken;
 
   // 🎯 크리티컬 발동 시 UI 연출 콜백 (강한 흔들림/큰 이펙트/CRITICAL 텍스트)
   Function()? onCritical;
+
+  // 🎯 [2] 터치 데미지 콜백 (모든 터치마다 호출) - UI에서 '+N' 데미지 숫자 팝업 표시용
+  Function(int damage, bool isCritical)? onDamage;
 
   // ✅ 저금통 깨질 때 전면광고 준비 다이얼로그 콜백 (모든 단계)
   Function(String message, VoidCallback onComplete)? onShowBreakAdPreparationDialog;
@@ -77,8 +95,8 @@ class Game2Notifier extends StateNotifier<Game2State> {
         isPiggyBankActive: true,
         isEmptyPiggyBank: false,
         currentLevel: currentLevel,
-        currentDurability: levelConfig.durability,
-        maxDurability: levelConfig.durability,
+        currentDurability: _effectiveDurability(levelConfig.durability),
+        maxDurability: _effectiveDurability(levelConfig.durability),
       );
     }
 
@@ -229,8 +247,8 @@ class Game2Notifier extends StateNotifier<Game2State> {
       isPiggyBankActive: true,
       isEmptyPiggyBank: false,
       currentLevel: 1,
-      currentDurability: levelConfig.durability,
-      maxDurability: levelConfig.durability,
+      currentDurability: _effectiveDurability(levelConfig.durability),
+      maxDurability: _effectiveDurability(levelConfig.durability),
     );
   }
 
@@ -243,8 +261,8 @@ class Game2Notifier extends StateNotifier<Game2State> {
       isPiggyBankActive: true,
       isEmptyPiggyBank: false,
       currentLevel: currentLevel,
-      currentDurability: levelConfig.durability,
-      maxDurability: levelConfig.durability,
+      currentDurability: _effectiveDurability(levelConfig.durability),
+      maxDurability: _effectiveDurability(levelConfig.durability),
     );
   }
 
@@ -265,13 +283,25 @@ class Game2Notifier extends StateNotifier<Game2State> {
       HapticFeedback.mediumImpact();
     }
 
-    // 내구도 감소 (크리티컬 -10, 일반 -1). 0 밑으로는 내려가지 않게 clamp.
-    final int damage = isCritical ? _criticalDamage : 1;
+    // 🎯 [1] 데미지 계산
+    //   랜덤 체계 on: 일반 10~30 / 크리티컬 100~300 랜덤.  off: 일반 -1 / 크리티컬 -10(구).
+    final int damage;
+    if (_game2RandomDamageEnabled) {
+      damage = isCritical
+          ? _criticalDamageMin + _random.nextInt(_criticalDamageMax - _criticalDamageMin + 1)
+          : _normalDamageMin + _random.nextInt(_normalDamageMax - _normalDamageMin + 1);
+    } else {
+      damage = isCritical ? _criticalDamage : 1;
+    }
+    // 데미지가 남은 내구도보다 커도 0에서 멈춤 (clamp)
     final int newDurability = (state.currentDurability - damage).clamp(0, state.maxDurability);
     state = state.copyWith(
       currentDurability: newDurability,
       isShaking: true,
     );
+
+    // 🎯 [2] 데미지 숫자 팝업 콜백 (모든 터치)
+    onDamage?.call(damage, isCritical);
 
     // 🎯 크리티컬 연출 콜백 (강한 흔들림/큰 이펙트/CRITICAL 텍스트)
     if (isCritical) {
@@ -453,8 +483,8 @@ class Game2Notifier extends StateNotifier<Game2State> {
         isEmptyPiggyBank: false,
         isPiggyBankActive: true,
         currentLevel: nextLevel,
-        currentDurability: levelConfig.durability,
-        maxDurability: levelConfig.durability,
+        currentDurability: _effectiveDurability(levelConfig.durability),
+        maxDurability: _effectiveDurability(levelConfig.durability),
         piggyBankCount: newPiggyBankCount,
       );
     } else {
@@ -540,8 +570,8 @@ class Game2Notifier extends StateNotifier<Game2State> {
     state = state.copyWith(
       isSummoning: false,
       isPiggyBankActive: true,
-      currentDurability: levelConfig.durability,
-      maxDurability: levelConfig.durability,
+      currentDurability: _effectiveDurability(levelConfig.durability),
+      maxDurability: _effectiveDurability(levelConfig.durability),
       clearSummonStartTime: true,
       clearSummonTimerText: true,
     );

@@ -31,6 +31,14 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
   static const bool _game2CriticalEffectEnabled = true;
   // 📊 내구도 게이지 바 스위치 (false면 기존 숫자 표시로 복귀)
   static const bool _game2GaugeEnabled = true;
+  // 🔢 [2] 데미지 숫자 팝업 스위치
+  static const bool _game2DamagePopupEnabled = true;
+  // 📊 [3] 내구도 패널(라벨/게이지 %/하트 잔량) 스위치
+  static const bool _game2DurabilityPanelEnabled = true;
+  // 🎮 [4] 하단 안내 패널(둥근 박스) 스위치
+  static const bool _game2GuidePanelEnabled = true;
+  // 🏅 상단 STAGE 배지 + 최대보상 패널(게임 UI 헤더) 스위치
+  static const bool _game2StageHeaderEnabled = true;
 
   Timer? _hideNavBarTimer;
 
@@ -57,6 +65,10 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
 
   // 터치 효과를 위한 변수들
   List<TouchEffect> _touchEffects = [];
+
+  // 🔢 [2] 데미지 숫자 팝업 목록 + 위치 지터용 난수
+  final List<DamagePopup> _damagePopups = [];
+  final Random _popupRandom = Random();
 
   // 롱프레스 자동 터치 타이머
   Timer? _autoTouchTimer;
@@ -85,6 +97,9 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
 
     // 🎯 크리티컬 연출 콜백 설정
     notifier.onCritical = _triggerCriticalEffect;
+
+    // 🔢 [2] 데미지 숫자 팝업 콜백 설정
+    notifier.onDamage = _showDamagePopup;
 
     // 게임 이벤트 리스너 등록
     _listenGameEvents();
@@ -265,6 +280,13 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
       effect.animation.dispose();
     }
     _touchEffects.clear();
+
+    // 🔢 데미지 팝업 애니메이션들 정리
+    for (var p in _damagePopups) {
+      p.animation.stop();
+      p.animation.dispose();
+    }
+    _damagePopups.clear();
 
     // 애니메이션 컨트롤러 정지 후 해제 (super.dispose() 전에 반드시 처리)
     _shakeController?.stop();
@@ -556,14 +578,24 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // 최대 보상 금액 표시 (빨간색)
-              '최대 ${NumberFormat('#,###').format(actualMaxReward)} M'.text.size(32).bold.color(Colors.red).make(),
+              // 🏅 STAGE 배지 + 최대보상 패널 (게임 UI 헤더)
+              _game2StageHeaderEnabled
+                  ? _buildStageHeader(state.currentLevel, actualMaxReward)
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _buildLevelBadge(state.currentLevel),
+                        const SizedBox(width: 8),
+                        '최대 ${NumberFormat('#,###').format(actualMaxReward)} M'.text.size(32).bold.color(Colors.red).make(),
+                      ],
+                    ),
               const SizedBox(height: 8),
 
-              // 📊 단계 배지 + 내구도 게이지 (저금통 위쪽)
+              // 📊 [3] 내구도 패널 (라벨 + 게이지(%) + 안내/하트) — 저금통 위쪽
               if (_game2GaugeEnabled) ...[
-                _buildDurabilityGauge(state),
-                const SizedBox(height: 6),
+                _buildDurabilityPanel(state),
+                const SizedBox(height: 8),
               ],
 
               // 저금통 이미지와 내구도 (터치 가능 영역)
@@ -600,10 +632,10 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
                           // 저금통 이미지
                           Image.asset(
                             'assets/icons/$actualPigImage',
-                            width: Platform.isAndroid ? 300 : 270,
+                            width: Platform.isAndroid ? 250 : 230,
                             errorBuilder: (context, error, stackTrace) {
                               // 플러스 이미지가 없으면 일반 이미지 사용
-                              return Image.asset('assets/icons/${levelConfig.pigImage}', width: Platform.isAndroid ? 300 : 270);
+                              return Image.asset('assets/icons/${levelConfig.pigImage}', width: Platform.isAndroid ? 250 : 230);
                             },
                           ),
 
@@ -615,11 +647,7 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
                   },
                 ),
               ),
-
-              if (Platform.isAndroid) const SizedBox(height: 10),
-
-              // 안내 텍스트
-              '터치해서 저금통을 깨뜨리세요!'.text.size(18).bold.white.make(),
+              // 🎮 [4] 하단 안내 패널 제거 - 확보 공간을 저금통 확대에 사용
             ],
           ),
         ),
@@ -629,6 +657,13 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
             child: _buildTouchEffects(),
           ),
         ),
+        // 🔢 [2] 데미지 숫자 팝업 오버레이 (같은 _piggyStackKey 좌표계)
+        if (_game2DamagePopupEnabled)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: _buildDamagePopups(),
+            ),
+          ),
         // 🎯 CRITICAL! 텍스트 오버레이 (커졌다 사라짐)
         if (_showCriticalText)
           Positioned.fill(
@@ -984,6 +1019,109 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
     });
   }
 
+  // 🏅 STAGE 배지 + 최대보상 패널 (게임 UI 헤더)
+  //  [STAGE 원형 배지] [이번 저금통 최대 보상 패널] 을 한 줄에, 배지 좌측 고정 + 패널이 남은 공간 채움
+  Widget _buildStageHeader(int level, int maxReward) {
+    const Color gold = Color(0xFFFFC107); // 금색 테두리/강조
+    const Color goldSoft = Color(0xFFFFE082); // 연한 금색(라벨)
+    const double headerHeight = 58; // 배지 지름 = 최대보상 패널 높이 (나란히 정렬)
+    return Center(
+      child: Row(
+        mainAxisSize: MainAxisSize.min, // 내용 크기에 맞게 (화면 꽉 채우지 않음)
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // [1] STAGE 원형 배지 (지름 = 패널 높이)
+          Container(
+            width: headerHeight,
+            height: headerHeight,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                colors: [Color(0xFF7A5533), Color(0xFF3A2416)], // 갈색 → 진갈색
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              border: Border.all(color: gold, width: 2.5), // 금색 테두리
+              boxShadow: [
+                BoxShadow(color: gold.withOpacity(0.32), blurRadius: 8, spreadRadius: 0.5), // 은은한 글로우
+                BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 5, offset: const Offset(0, 2)),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'STAGE',
+                  style: TextStyle(color: goldSoft, fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 0.5, height: 1.0),
+                ),
+                Text(
+                  '$level',
+                  style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w900, height: 1.05),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          // [2] 최대보상 패널 (높이 = 배지, 폭은 내용에 딱 맞게)
+          SizedBox(
+            height: headerHeight,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14), // 좌우 여백 축소(글자 폭에 맞게)
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF4A2F1A), Color(0xFF2A1A0E)], // 어두운 갈색 그라데이션
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                ),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: gold, width: 2), // 금색 테두리
+                boxShadow: [
+                  BoxShadow(color: gold.withOpacity(0.22), blurRadius: 8, spreadRadius: 0.5),
+                  BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 5, offset: const Offset(0, 2)),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center, // 세로 중앙 정렬(고정 높이 안에서)
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // 윗줄: ⭐ 이번 저금통 최대 보상 ⭐ (별 간격 축소)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: const [
+                      Text('⭐', style: TextStyle(fontSize: 10)),
+                      SizedBox(width: 2),
+                      Text(
+                        '이번 저금통 최대 보상',
+                        style: TextStyle(color: goldSoft, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: -0.2),
+                      ),
+                      SizedBox(width: 2),
+                      Text('⭐', style: TextStyle(fontSize: 10)),
+                    ],
+                  ),
+                  const SizedBox(height: 1),
+                  // 아랫줄: 3,000 M (금색)
+                  Text(
+                    '${NumberFormat('#,###').format(maxReward)} M',
+                    style: const TextStyle(
+                      color: gold,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.5,
+                      shadows: [Shadow(color: Colors.black54, blurRadius: 3, offset: Offset(0, 1))],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // 🔢 단계 배지 (게이지 좌측의 원형 숫자) - '돼지저금통 N단계' 텍스트를 대체
   Widget _buildLevelBadge(int level) {
     const double size = 30;
@@ -1019,19 +1157,21 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
     final int maxDurability = state.maxDurability > 0 ? state.maxDurability : 1;
     final double ratio = (state.currentDurability / maxDurability).clamp(0.0, 1.0);
 
-    // 구간별 색상
-    final Color barColor;
+    // 구간별 색상 (각 구간을 세로 그라데이션: 위 밝음 → 아래 진함)
+    final List<Color> barGradient;
     if (ratio > 0.5) {
-      barColor = const Color(0xFF4CAF50); // 초록
+      barGradient = const [Color(0xFF8BE28F), Color(0xFF2E7D32)]; // 초록
     } else if (ratio > 0.2) {
-      barColor = const Color(0xFFFFA726); // 주황
+      barGradient = const [Color(0xFFFFD54F), Color(0xFFF57C00)]; // 노랑 → 주황
     } else {
-      barColor = const Color(0xFFE53935); // 빨강
+      barGradient = const [Color(0xFFFF6E6E), Color(0xFFC62828)]; // 빨강
     }
     final bool isDanger = ratio <= 0.2 && ratio > 0;
 
-    const double gaugeWidth = 260;
-    const double gaugeHeight = 22;
+    const double gaugeWidth = 300;
+    const double gaugeHeight = 34; // 굵게 (기존 22의 약 1.55배)
+    const Color frameColor = Color(0xFFC9A227); // 금색/갈색 프레임
+    const Color trackColor = Color(0xFF241A12); // 어두운 갈색 트랙
 
     return AnimatedBuilder(
       // 터치/크리티컬 흔들림 + 위험 구간 깜빡임(_pulseController)을 함께 반영
@@ -1048,17 +1188,19 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
           offset: Offset(normalShake + critShake, 0),
           child: Row(
             mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center, // 배지 제거 후 바를 화면 가운데 정렬
             children: [
-              // 🔢 단계 배지 (게이지 좌측)
-              _buildLevelBadge(state.currentLevel),
-              const SizedBox(width: 10),
               Container(
                 width: gaugeWidth,
                 height: gaugeHeight,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2A2A2A), // 트랙(빈 부분)
+                  color: trackColor, // 어두운 갈색 트랙(빈 부분)
                   borderRadius: BorderRadius.circular(gaugeHeight / 2),
-                  border: Border.all(color: Colors.white24, width: 1.5),
+                  border: Border.all(color: frameColor, width: 3), // 게임 체력바 같은 금색 프레임
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withOpacity(0.45), blurRadius: 4, offset: const Offset(0, 2)),
+                    BoxShadow(color: frameColor.withOpacity(0.25), blurRadius: 6, spreadRadius: 0.5),
+                  ],
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(gaugeHeight / 2),
@@ -1088,15 +1230,50 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
                             child: Container(
                               decoration: BoxDecoration(
                                 gradient: LinearGradient(
-                                  colors: [barColor.withOpacity(0.85), barColor],
+                                  colors: barGradient, // 위 밝음 → 아래 진함(입체감)
                                   begin: Alignment.topCenter,
                                   end: Alignment.bottomCenter,
+                                ),
+                              ),
+                              // 상단 광택(하이라이트) - 유리 같은 반사감
+                              child: Align(
+                                alignment: Alignment.topCenter,
+                                child: FractionallySizedBox(
+                                  heightFactor: 0.5,
+                                  widthFactor: 1,
+                                  child: Container(
+                                    margin: const EdgeInsets.fromLTRB(3, 2, 3, 0),
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [Colors.white.withOpacity(0.45), Colors.white.withOpacity(0.0)],
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                      ),
+                                      borderRadius: BorderRadius.circular(gaugeHeight / 2),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
                       ),
+                      // 🔢 [3] 게이지 중앙 퍼센트 표시
+                      if (_game2DurabilityPanelEnabled)
+                        Positioned.fill(
+                          child: Center(
+                            child: Text(
+                              '${(ratio * 100).round()}%',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w900,
+                                height: 1.0,
+                                shadows: [Shadow(color: Colors.black87, blurRadius: 2, offset: Offset(0, 1))],
+                              ),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -1105,6 +1282,157 @@ class _GameScreen2State extends ConsumerState<GameScreen2> with TickerProviderSt
           ),
         );
       },
+    );
+  }
+
+  // 📊 [3] 내구도 패널: 라벨 + 게이지(%) + (안내문구 / ❤️ 잔량)
+  Widget _buildDurabilityPanel(Game2State state) {
+    const double panelWidth = 300; // 게이지 폭과 동일
+    if (!_game2DurabilityPanelEnabled) {
+      return _buildDurabilityGauge(state);
+    }
+    final int maxDurability = state.maxDurability > 0 ? state.maxDurability : 1;
+    final int cur = state.currentDurability.clamp(0, maxDurability);
+    final fmt = NumberFormat('#,###');
+    return SizedBox(
+      width: panelWidth,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // 라벨
+          '저금통 내구도 🐷'.text.size(15).bold.white.letterSpacing(-0.2).make(),
+          const SizedBox(height: 5),
+          // 게이지 (중앙 % 포함)
+          _buildDurabilityGauge(state),
+          const SizedBox(height: 4),
+          // ❤️ 잔량 (우측 정렬) — 안내 문구('터치할수록…')는 제거하고 잔량만 유지
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const Text('❤️', style: TextStyle(fontSize: 15)),
+              const SizedBox(width: 4),
+              '${fmt.format(cur)} / ${fmt.format(maxDurability)}'
+                  .text
+                  .size(16)
+                  .bold
+                  .color(Colors.white)
+                  .letterSpacing(-0.2)
+                  .make(),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 🎮 [4] 하단 안내 패널 (둥근 박스, '터치'/'깨뜨려요' 강조)
+  Widget _buildGuidePanel() {
+    const highlight = Color(0xFFFFD54F); // 강조색(노랑)
+    const base = Colors.white;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+      decoration: BoxDecoration(
+        color: const Color(0xFF3A2A1A).withOpacity(0.92), // 어두운 갈색 톤
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF6B4E2E), width: 1.5),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 6, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('👆', style: TextStyle(fontSize: 16)),
+          const SizedBox(width: 6),
+          RichText(
+            text: const TextSpan(
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: base, letterSpacing: -0.3),
+              children: [
+                TextSpan(text: '연속으로 '),
+                TextSpan(text: '터치', style: TextStyle(color: highlight, fontWeight: FontWeight.w900)),
+                TextSpan(text: '해서 '),
+                TextSpan(text: '깨뜨려요', style: TextStyle(color: highlight, fontWeight: FontWeight.w900)),
+                TextSpan(text: '!'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 🔢 [2] 데미지 숫자 팝업 추가 (터치 지점 근처에서 위로 떠오르며 사라짐)
+  void _showDamagePopup(int damage, bool isCritical) {
+    if (!_game2DamagePopupEnabled || !mounted) return;
+    final base = _lastTouchLocalPos;
+    if (base == null) return;
+    // 겹침 방지용 소폭 지터
+    final jitterX = (_popupRandom.nextDouble() - 0.5) * 46;
+    final jitterY = (_popupRandom.nextDouble() - 0.5) * 20;
+    final popup = DamagePopup(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      position: base + Offset(jitterX, jitterY),
+      damage: damage,
+      critical: isCritical,
+      animation: AnimationController(
+        duration: Duration(milliseconds: isCritical ? 850 : 650),
+        vsync: this,
+      ),
+    );
+    popup.animation.forward().then((_) {
+      if (mounted) {
+        setState(() => _damagePopups.removeWhere((p) => p.id == popup.id));
+      }
+      popup.animation.dispose();
+    });
+    setState(() => _damagePopups.add(popup));
+  }
+
+  // 🔢 [2] 데미지 숫자 팝업 렌더링
+  Widget _buildDamagePopups() {
+    if (_damagePopups.isEmpty) return const SizedBox.shrink();
+    return Stack(
+      children: _damagePopups.map((p) {
+        final double fontSize = p.critical ? 40 : 26;
+        final Color color = p.critical ? const Color(0xFFFF7043) : Colors.white;
+        return AnimatedBuilder(
+          animation: p.animation,
+          builder: (context, _) {
+            final v = p.animation.value; // 0→1
+            final dy = -70 * v; // 위로 이동
+            final opacity = (1.0 - v).clamp(0.0, 1.0);
+            final scale = p.critical ? (0.7 + 0.6 * (v < 0.3 ? v / 0.3 : 1.0)) : (0.9 + 0.3 * (v < 0.3 ? v / 0.3 : 1.0));
+            return Positioned(
+              left: p.position.dx - 40,
+              top: p.position.dy - 20 + dy,
+              child: Opacity(
+                opacity: opacity,
+                child: Transform.scale(
+                  scale: scale,
+                  child: SizedBox(
+                    width: 80,
+                    child: Text(
+                      '+${p.damage}',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: fontSize,
+                        fontWeight: FontWeight.w900,
+                        color: color,
+                        letterSpacing: -0.5,
+                        shadows: [
+                          Shadow(color: p.critical ? Colors.red.shade900 : Colors.black87, blurRadius: p.critical ? 8 : 4, offset: const Offset(1, 1)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      }).toList(),
     );
   }
 
@@ -1276,5 +1604,22 @@ class TouchEffect {
     required this.position,
     required this.animation,
     this.critical = false,
+  });
+}
+
+// 🔢 [2] 데미지 숫자 팝업 ('+25' 처럼 떴다가 위로 올라가며 사라짐)
+class DamagePopup {
+  final String id;
+  final Offset position;
+  final int damage;
+  final bool critical; // 크리티컬이면 더 크고 강조색
+  final AnimationController animation;
+
+  DamagePopup({
+    required this.id,
+    required this.position,
+    required this.damage,
+    required this.critical,
+    required this.animation,
   });
 }
