@@ -162,24 +162,12 @@ class _MainScreenState extends ConsumerState<MainScreen> with WidgetsBindingObse
     // 알림 권한 요청 (permission_handler 권한이 모두 처리된 후 마지막에 수행)
     await _requestNotificationPermission();
 
-    // Android: permission_handler 기반 권한을 먼저 요청
-    // (NotificationService.requestPermissions() 내부의 requestExactAlarmsPermission은
-    //  Android 12+에서 시스템 설정 화면으로 유저를 이동시켜 앱이 백그라운드로 빠지는데,
-    //  그 상태에서 permission_handler.request()를 호출하면 다이얼로그가 조용히 삼켜짐.
-    //  따라서 activityRecognition / ignoreBatteryOptimizations 를 먼저 처리한다.)
+    // 🚶 만보기 전용 권한(신체활동 / 배터리 최적화 해제)은 첫 진입에서 요청하지 않는다.
+    //    → 만보기 화면(work_screen) 진입 시점에 요청한다. (첫 실행 팝업 최소화)
+    //    여기서는 '이미 허용된 경우에만' 팝업 없이 포그라운드 서비스를 되살려
+    //    기존 유저의 백그라운드 걸음수 집계가 끊기지 않도록만 보장한다.
     if (Platform.isAndroid) {
-      try {
-        final status = await Permission.activityRecognition.request();
-        if (status.isGranted) {
-          final repository = ref.read(workRepositoryProvider);
-          await repository.startForegroundService();
-        }
-      } catch (e) {
-        print('만보기 권한 요청 중 오류: $e');
-      }
-
-      // 배터리 최적화 예외 요청 (걸음수 백그라운드 측정 안정화)
-      await _requestBatteryOptimizationExemption();
+      await _restoreStepServiceIfPermitted();
     }
 
     // iOS: ATT 사전 안내 다이얼로그 + 권한 요청 (광고 로드 전에 먼저 처리)
@@ -280,59 +268,22 @@ class _MainScreenState extends ConsumerState<MainScreen> with WidgetsBindingObse
     }
   }
 
-  /// 배터리 최적화 예외 요청 (Android 전용)
-  Future<void> _requestBatteryOptimizationExemption() async {
+  /// 🚶 이미 신체활동 권한이 있는 경우에만 걸음수 포그라운드 서비스를 복구 (Android 전용)
+  ///
+  /// 권한 '요청'은 하지 않고 상태만 확인하므로 신규 유저에게는 아무 팝업도 뜨지 않는다.
+  /// 이미 허용한 기존 유저는 OS가 서비스를 종료했더라도 앱 실행만으로 다시 살아나,
+  /// 만보기 화면에 들어가지 않아도 백그라운드 집계가 끊기지 않는다.
+  /// (네이티브가 마지막 센서값을 저장해 두므로 중단 구간의 걸음도 재시작 시 delta로 복구됨)
+  Future<void> _restoreStepServiceIfPermitted() async {
     try {
-      final status = await Permission.ignoreBatteryOptimizations.status;
-      if (status.isGranted) return;
+      final status = await Permission.activityRecognition.status;
+      if (!status.isGranted) return; // 미허용이면 아무것도 하지 않음 (요청도 안 함)
 
-      if (!mounted) return;
-
-      // 안내 팝업 표시 후 시스템 다이얼로그 호출
-      final shouldRequest = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          content: const Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '💡 걸음수 정확도 향상',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                textAlign: TextAlign.center,
-              ),
-              SizedBox(height: 16),
-              Text(
-                '배터리 최적화를 해제하면 걸음수가 더 정확히 측정됩니다. 안심하세요! 실제 배터리 소모량은 아주 미미합니다.\n\n\'허용\'을 눌러주세요!',
-                style: TextStyle(fontSize: 14, color: Colors.black87, height: 1.5),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-          actions: [
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.orange,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-                child: const Text('확인', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-              ),
-            ),
-          ],
-        ),
-      );
-
-      if (shouldRequest == true) {
-        await Permission.ignoreBatteryOptimizations.request();
-      }
+      final repository = ref.read(workRepositoryProvider);
+      await repository.startForegroundService();
+      print('🚶 신체활동 권한 보유 - 걸음수 서비스 복구');
     } catch (e) {
-      print('배터리 최적화 예외 요청 오류: $e');
+      print('걸음수 서비스 복구 중 오류: $e');
     }
   }
 

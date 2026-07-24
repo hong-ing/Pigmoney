@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:velocity_x/velocity_x.dart';
 import 'package:vibration/vibration.dart';
 
@@ -32,6 +33,8 @@ class WorkScreen extends ConsumerStatefulWidget {
 }
 
 class _WorkScreenState extends ConsumerState<WorkScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
+  // 🔋 배터리 최적화 해제 안내를 1회만 표시하기 위한 키
+  static const String _batteryPromptShownKey = 'batteryOptimizationPromptShown';
   final _soundPlayer = AudioPlayer();
   bool _isProcessing = false;
 
@@ -86,6 +89,8 @@ class _WorkScreenState extends ConsumerState<WorkScreen> with TickerProviderStat
         await _startPlatformStepCounting(repository);
         await notifier.refresh();
         await notifier.saveStepsToServer();
+        // 🔋 신체활동 권한이 있는 상태에서만 배터리 최적화 해제 안내
+        await _maybeRequestBatteryOptimizationExemption();
         return;
       }
 
@@ -107,12 +112,89 @@ class _WorkScreenState extends ConsumerState<WorkScreen> with TickerProviderStat
       // 5. 권한 획득 후 걸음수 카운팅 시작
       await _startPlatformStepCounting(repository);
       await notifier.saveStepsToServer();
+
+      // 6. 🔋 신체활동 권한을 받은 '직후'에만 배터리 최적화 해제 안내
+      await _maybeRequestBatteryOptimizationExemption();
     });
   }
 
   /// 플랫폼별 걸음수 카운팅 시작
   Future<void> _startPlatformStepCounting(WorkRepository repository) async {
     await repository.startForegroundService();
+  }
+
+  /// 🔋 배터리 최적화 해제 안내 + 요청 (Android 전용, 만보기 화면에서만)
+  ///
+  /// 기존에는 앱 첫 진입(main_screen)에서 물어 팝업이 몰렸는데,
+  /// 만보기 전용 설정이므로 신체활동 권한을 확보한 뒤 이 화면에서만 안내한다.
+  /// 매 진입마다 묻지 않도록 1회만 안내한다(이미 해제된 경우엔 아예 묻지 않음).
+  Future<void> _maybeRequestBatteryOptimizationExemption() async {
+    if (!Platform.isAndroid) return;
+
+    try {
+      final status = await Permission.ignoreBatteryOptimizations.status;
+      if (status.isGranted) return; // 이미 해제됨 → 묻지 않음
+
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_batteryPromptShownKey) ?? false) return; // 이미 1회 안내함
+      await prefs.setBool(_batteryPromptShownKey, true);
+
+      if (!mounted) return;
+
+      final shouldRequest = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          content: const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '💡 걸음수 정확도 향상',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 16),
+              Text(
+                '배터리 최적화를 해제하면 걸음수가 더 정확히 측정됩니다. 안심하세요! 실제 배터리 소모량은 아주 미미합니다.\n\n\'허용\'을 눌러주세요!',
+                style: TextStyle(fontSize: 14, color: Colors.black87, height: 1.5),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+          actions: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('나중에', style: TextStyle(fontSize: 15, color: Colors.grey)),
+                  ),
+                ),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text('확인', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+
+      if (shouldRequest == true) {
+        await Permission.ignoreBatteryOptimizations.request();
+      }
+    } catch (e) {
+      print('배터리 최적화 예외 요청 오류: $e');
+    }
   }
 
   /// 권한 없을 때 팝업 표시

@@ -149,11 +149,9 @@ class NotificationService {
         final bool? notificationPermissionGranted = await androidImplementation?.requestNotificationsPermission();
         debugPrint('Android 알림 권한 결과: ${notificationPermissionGranted ?? false}');
 
-        // 정확한 알람 권한 요청
-        final bool? exactAlarmPermissionGranted = await androidImplementation?.requestExactAlarmsPermission();
-        debugPrint('Android 정확한 알람 권한 결과: ${exactAlarmPermissionGranted ?? false}');
-
-        permissionGranted = (notificationPermissionGranted ?? false) && (exactAlarmPermissionGranted ?? false);
+        // ⏰ 정확한 알람 권한 요청 제거: 예약 알림을 inexactAllowWhileIdle로 변경해 더 이상 필요 없음
+        //    (기존에는 Android 12+에서 시스템 설정 화면으로 이탈시켜 첫 실행 경험을 해쳤음)
+        permissionGranted = notificationPermissionGranted ?? false;
       }
 
       // 권한이 거부된 경우에만 알림 설정을 false로 변경
@@ -219,7 +217,9 @@ class NotificationService {
         body,
         tz.TZDateTime.from(scheduledTime, tz.local),
         platformChannelSpecifics,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        // ⏰ 정확한 알람(SCHEDULE_EXACT_ALARM)은 Android 12+에서 시스템 설정 화면 이동을 유발해
+        //    첫 실행 이탈이 크다. 알림 성격상 몇 분 오차는 무방하므로 inexact로 낮춰 권한 자체를 제거.
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         payload: payload ?? 'auto_earn_completed',
       );
 
@@ -288,7 +288,9 @@ class NotificationService {
         body,
         tz.TZDateTime.from(scheduledTime, tz.local),
         platformChannelSpecifics,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        // ⏰ 정확한 알람(SCHEDULE_EXACT_ALARM)은 Android 12+에서 시스템 설정 화면 이동을 유발해
+        //    첫 실행 이탈이 크다. 알림 성격상 몇 분 오차는 무방하므로 inexact로 낮춰 권한 자체를 제거.
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         payload: payload ?? 'work_timer_completed',
       );
 
@@ -390,7 +392,9 @@ class NotificationService {
         body,
         scheduledTime,
         platformChannelSpecifics,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        // ⏰ 정확한 알람(SCHEDULE_EXACT_ALARM)은 Android 12+에서 시스템 설정 화면 이동을 유발해
+        //    첫 실행 이탈이 크다. 알림 성격상 몇 분 오차는 무방하므로 inexact로 낮춰 권한 자체를 제거.
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         payload: 'attendance_reminder',
       );
 
@@ -447,7 +451,9 @@ class NotificationService {
         '👛동전지갑이 꽉 찼어요! 얼른 꺼내가세요!',
         scheduledTime,
         platformChannelSpecifics,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        // ⏰ 정확한 알람(SCHEDULE_EXACT_ALARM)은 Android 12+에서 시스템 설정 화면 이동을 유발해
+        //    첫 실행 이탈이 크다. 알림 성격상 몇 분 오차는 무방하므로 inexact로 낮춰 권한 자체를 제거.
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         payload: 'coin_purse_full',
       );
 
