@@ -1571,7 +1571,12 @@ class _CycleBonusBurstState extends State<_CycleBonusBurst> with SingleTickerPro
   Widget build(BuildContext context) {
     return Positioned.fill(
       child: IgnorePointer(
-        child: AnimatedBuilder(
+        // 🩹 Navigator overlay에 직접 삽입되어 Material 조상이 없으면
+        //    Flutter가 fallback 텍스트 스타일(노란 이중 밑줄)을 적용한다.
+        //    transparency 타입이라 배경/그림자 없이 스타일 문제만 해결된다.
+        child: Material(
+          type: MaterialType.transparency,
+          child: AnimatedBuilder(
           animation: _c,
           builder: (context, _) {
             final n = (widget.amount * _count.value).round();
@@ -1615,6 +1620,7 @@ class _CycleBonusBurstState extends State<_CycleBonusBurst> with SingleTickerPro
               ),
             );
           },
+          ),
         ),
       ),
     );
