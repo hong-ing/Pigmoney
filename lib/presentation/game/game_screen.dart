@@ -80,6 +80,8 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
 
     final notifier = ref.read(gameProvider.notifier);
     notifier.onStartCoinAnimation = _startCoinCollectAnimation;
+    // 🧲 자석으로 딸려가는 동전 전용 연출 콜백
+    notifier.onStartMagnetCoinAnimation = _startMagnetCoinCollectAnimation;
     notifier.onStartDropAnimation = _startCoinDropAnimation;
     // 💣 폭탄 발동 연출 콜백
     notifier.onStartBombScatterAnimation = _startBombScatterAnimation;
@@ -262,6 +264,81 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
       controller.forward();
     } catch (e) {
       print('_startCoinCollectAnimation 에러: $e');
+    }
+  }
+
+  // 🧲 자석으로 딸려가는 동전 전용 수집 애니메이션
+  //
+  // 일반 수집(250ms 직선)과 달리 2단계로 움직여 '끌려간다'는 인상을 준다.
+  //  1단계(빨려듦): 먼저 터치한 동전 쪽으로 빠르게 당겨짐 (easeOut = 확 낚아채는 느낌)
+  //  2단계(뒤따라감): 그 지점에서 저금통까지 가속하며 이동 (easeIn = 따라붙는 느낌)
+  // 터치한 동전(250ms)보다 늦게 도착해 자연스럽게 '뒤를 따라가는' 시간차가 생긴다.
+  void _startMagnetCoinCollectAnimation(Coin coin, Offset towardPosition) {
+    if (!mounted) return;
+    if (coin.controller != null && coin.controller!.isAnimating) return;
+
+    try {
+      // 총 430ms (기존 250ms + 약간의 시간차. 답답하지 않은 선)
+      final controller = AnimationController(
+        duration: const Duration(milliseconds: 430),
+        vsync: this,
+      );
+      coin.controller = controller;
+
+      final RenderBox? stackBox = _gameAreaKey.currentContext?.findRenderObject() as RenderBox?;
+      final RenderBox? piggyBox = _piggyBankKey.currentContext?.findRenderObject() as RenderBox?;
+      if (stackBox == null || piggyBox == null) return;
+
+      final piggyPositionInStack = stackBox.globalToLocal(piggyBox.localToGlobal(Offset.zero));
+      final piggyCenter = piggyPositionInStack + Offset(piggyBox.size.width / 2, piggyBox.size.height / 3);
+      final startPosition = coin.position;
+      final endPosition = Offset(piggyCenter.dx - coin.size / 2, piggyCenter.dy - coin.size / 2);
+
+      // 1단계 도착점: 터치한 동전 위치의 85% 지점 (완전히 겹치지 않게 살짝 못 미치게)
+      final pullPoint = Offset.lerp(startPosition, towardPosition, 0.85)!;
+
+      coin.animation = TweenSequence<Offset>([
+        // 1단계: 자석에 빨려들듯 확 당겨짐
+        TweenSequenceItem(
+          tween: Tween<Offset>(begin: startPosition, end: pullPoint)
+              .chain(CurveTween(curve: Curves.easeOutCubic)),
+          weight: 32,
+        ),
+        // 2단계: 앞선 동전의 뒤를 따라 가속하며 저금통으로
+        TweenSequenceItem(
+          tween: Tween<Offset>(begin: pullPoint, end: endPosition)
+              .chain(CurveTween(curve: Curves.easeInCubic)),
+          weight: 68,
+        ),
+      ]).animate(controller);
+
+      // 🧲 크기 연출: 당겨질 때 살짝 움츠렸다가(0.86) 튕겨 따라붙으며(1.06) 원래대로
+      coin.scaleAnimation = TweenSequence<double>([
+        TweenSequenceItem(tween: Tween<double>(begin: 1.0, end: 0.86), weight: 22),
+        TweenSequenceItem(tween: Tween<double>(begin: 0.86, end: 1.06), weight: 20),
+        TweenSequenceItem(tween: Tween<double>(begin: 1.06, end: 1.0), weight: 58),
+      ]).animate(controller);
+
+      // 자석 글로우 표시 on
+      coin.isMagnetPulled = true;
+
+      coin.animation!.addStatusListener((status) {
+        if (status == AnimationStatus.completed && mounted) {
+          coin.isMagnetPulled = false;
+          ref.read(gameProvider.notifier).handleAnimationEnd(coin);
+          coin.dispose();
+        }
+      });
+
+      // 수집 상태로 전환 (적립/사운드 등 기존 처리 그대로)
+      if (mounted) {
+        ref.read(gameProvider.notifier).startCollectingCoin(coin);
+      }
+
+      controller.forward();
+    } catch (e) {
+      print('_startMagnetCoinCollectAnimation 에러: $e');
+      coin.isMagnetPulled = false;
     }
   }
 

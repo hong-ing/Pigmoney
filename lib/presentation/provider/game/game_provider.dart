@@ -89,6 +89,10 @@ class GameNotifier extends StateNotifier<GameState> {
 
   // 콜백 함수 정의
   Function(Coin)? onStartCoinAnimation;
+
+  /// 🧲 자석으로 딸려가는 동전 전용 수집 애니메이션 콜백
+  /// (magnetCoin: 딸려가는 동전, towardPosition: 먼저 터치한 동전의 위치)
+  void Function(Coin magnetCoin, Offset towardPosition)? onStartMagnetCoinAnimation;
   Function(Coin)? onStartDropAnimation; // 낙하 애니메이션용
   Function(Coin)? onStartBombScatterAnimation; // 💣 폭탄 흩뿌림→수집 애니메이션용
   Function()? onBombFlash; // 💣 폭탄 발동 시 화면 플래시용
@@ -2011,11 +2015,17 @@ class GameNotifier extends StateNotifier<GameState> {
     onStartCoinAnimation?.call(tappedCoin);
 
     // 🧲 자석 모드: 가장 가까운 바닥 동전 1개도 함께 수집
+    //    (수집 대상 선정/적립 로직은 그대로. 연출만 '끌려가는' 전용 애니메이션 사용)
     Coin? magnetCoin;
     if (magnetBuffEnabled && state.isMagnetModeActive) {
       magnetCoin = _findNearestFloorCoin(tappedCoin);
       if (magnetCoin != null) {
-        onStartCoinAnimation?.call(magnetCoin);
+        if (onStartMagnetCoinAnimation != null) {
+          // 터치한 동전 쪽으로 빨려든 뒤 그 뒤를 따라 저금통으로
+          onStartMagnetCoinAnimation!(magnetCoin, tappedCoin.position);
+        } else {
+          onStartCoinAnimation?.call(magnetCoin); // 콜백 미연결 시 기존 동작
+        }
       }
     }
 

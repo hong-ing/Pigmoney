@@ -46,15 +46,24 @@ class FloorCoinsDisplay extends ConsumerWidget {
                       height: coin.size,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        boxShadow: isSelected && coin.animationState == CoinAnimationState.collecting
+                        // 🧲 자석에 끌려가는 동전은 청록 글로우로 구분 (자석 인력 힌트)
+                        boxShadow: coin.isMagnetPulled && coin.animationState == CoinAnimationState.collecting
                             ? [
                                 BoxShadow(
-                                  color: Colors.white.withOpacity(0.8),
-                                  blurRadius: 10,
-                                  spreadRadius: 3,
+                                  color: const Color(0xFF4DD0E1).withOpacity(0.85),
+                                  blurRadius: 16,
+                                  spreadRadius: 5,
                                 ),
                               ]
-                            : null,
+                            : isSelected && coin.animationState == CoinAnimationState.collecting
+                                ? [
+                                    BoxShadow(
+                                      color: Colors.white.withOpacity(0.8),
+                                      blurRadius: 10,
+                                      spreadRadius: 3,
+                                    ),
+                                  ]
+                                : null,
                       ),
                       // 💣 폭탄 연출용 크기/회전 애니메이션이 있으면 적용
                       child: Transform.scale(

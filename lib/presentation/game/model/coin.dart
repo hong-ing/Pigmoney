@@ -16,6 +16,9 @@ class Coin {
   CoinAnimationState animationState;
   AnimationController? controller;
 
+  /// 🧲 자석 버프로 '끌려가는 중'인 동전 (수집 연출 중 자석 느낌의 글로우 표시용)
+  bool isMagnetPulled = false;
+
   bool _isDisposed = false;
 
   Coin({
