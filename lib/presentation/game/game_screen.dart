@@ -35,6 +35,9 @@ class GameScreen extends ConsumerStatefulWidget {
 }
 
 class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStateMixin, WidgetsBindingObserver {
+  // 🎵 dispose 시 ref 사용 불가하므로 GameNotifier 참조를 보관 (BGM 정지/화면 비활성 처리용)
+  GameNotifier? _gameNotifier;
+
   final GlobalKey _gameAreaKey = GlobalKey();
   final GlobalKey _piggyBankKey = GlobalKey();
   final GlobalKey _rightRefillKey = GlobalKey();
@@ -79,6 +82,12 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: [SystemUiOverlay.top]);
 
     final notifier = ref.read(gameProvider.notifier);
+    _gameNotifier = notifier; // dispose에서 ref 없이 안전하게 접근하기 위해 보관
+    // 🎵 머니톡톡 화면 활성화 → BGM은 이 시점부터만 재생/재개 허용
+    notifier.setGameScreenActive(true);
+    // 화면 진입 시 명시적으로 BGM 시작(설정 OFF/이미 재생 중이면 내부에서 no-op).
+    //   _initialize 자동재생 타이밍에 의존하지 않도록 화면이 직접 트리거한다.
+    notifier.playBackgroundMusic();
     notifier.onStartCoinAnimation = _startCoinCollectAnimation;
     // 🧲 자석으로 딸려가는 동전 전용 연출 콜백
     notifier.onStartMagnetCoinAnimation = _startMagnetCoinCollectAnimation;
@@ -1068,9 +1077,10 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
       // ✅ 하단 네이티브 배너 해제
       admobService.disposeNativeAdByKey(_nativeAdKey);
 
-      // BGM 일시정지 (위치 유지)
+      // 🎵 머니톡톡 화면 비활성화 → 이후 어떤 콜백이 와도 BGM 재생/재개 차단 + 즉시 정지
+      //   (dispose에서는 ref 사용 불가하므로 initState에서 보관한 참조 사용)
       try {
-        ref.read(gameProvider.notifier).stopBackgroundMusic();
+        _gameNotifier?.setGameScreenActive(false);
       } catch (e) {
         print('BGM 정지 중 에러 (무시됨): $e');
       }
@@ -1116,7 +1126,9 @@ class _GameScreenState extends ConsumerState<GameScreen> with TickerProviderStat
     if (state == AppLifecycleState.resumed) {
       print('🎵 게임 화면 resumed - 오디오 재개 및 데이터 새로고침');
 
-      // 오디오 재개
+      // 🎵 포그라운드 복귀 시점에 머니톡톡 화면이 떠 있으므로 활성 재확인 후 재개
+      //   (이 핸들러는 game_screen이 mounted일 때만 실행됨 = 지금 이 화면이 현재 화면)
+      gameNotifier.setGameScreenActive(true);
       gameNotifier.resumeBackgroundMusic();
 
       // 🌅 백그라운드에서 새벽 5시를 넘긴 경우 일일 리셋 적용

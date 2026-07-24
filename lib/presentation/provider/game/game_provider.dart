@@ -2309,10 +2309,31 @@ class GameNotifier extends StateNotifier<GameState> {
     }
   }
 
+  // 🎵 머니톡톡 화면이 현재 '활성(포그라운드에 떠 있는)' 상태인지.
+  //   BGM은 이 화면이 활성일 때만 재생/재개된다. 홈·다른 탭에서 노티파이어가 되살아나거나
+  //   (main_screen이 resume마다 gameProvider.notifier를 읽어 autoDispose된 노티파이어를 재생성함)
+  //   광고 종료 콜백이 와도 BGM이 켜지지 않도록 하는 단일 게이트.
+  bool _isGameScreenActive = false;
+
+  /// 머니톡톡 화면 진입/이탈 시 호출. 이탈(false) 시 BGM을 즉시 정지한다.
+  void setGameScreenActive(bool active) {
+    _isGameScreenActive = active;
+    if (!active) {
+      // 화면을 벗어나거나 종료될 때: 백그라운드/다른 화면에서 계속 나지 않도록 즉시 정지
+      bgmService.pause(GameType.game1);
+      _stopMagnetLoopSound();
+    }
+  }
+
   void playBackgroundMusic() async {
     final settings = _ref.read(settingsProvider);
-    print('🎵 playBackgroundMusic 호출됨 - BGM 설정: ${settings.isBgmEnabled}');
+    print('🎵 playBackgroundMusic 호출됨 - BGM 설정: ${settings.isBgmEnabled}, 화면활성: $_isGameScreenActive');
     if (!settings.isBgmEnabled) return;
+    // 🎵 머니톡톡 화면이 활성일 때만 재생 (홈/다른 화면에서 재생 방지)
+    if (!_isGameScreenActive) {
+      print('🎵 playBackgroundMusic - 게임 화면 비활성 → 재생 안 함');
+      return;
+    }
 
     try {
       // BgmService 사용 - 일시정지 상태면 이어서 재생, 아니면 처음부터
@@ -2339,13 +2360,18 @@ class GameNotifier extends StateNotifier<GameState> {
   }
 
   void resumeBackgroundMusic() {
+    if (_isDisposed) return;
+    // 🎵 머니톡톡 화면이 활성일 때만 재개.
+    //   (광고 종료 콜백/생명주기 resume이 홈·다른 화면에서 와도 BGM이 켜지지 않도록)
+    if (!_isGameScreenActive) {
+      print('🎵 resumeBackgroundMusic - 게임 화면 비활성 → 재개 안 함');
+      return;
+    }
     // 활성 게임 BGM만 재개(isBgmEnabled는 bgmService가 캐시로 체크).
-    if (!_isDisposed) {
-      bgmService.resumeActive();
-      // 🧲 자석 모드가 아직 활성 상태면 지지직 사운드 재개
-      if (state.isMagnetModeActive) {
-        _startMagnetLoopSound();
-      }
+    bgmService.resumeActive();
+    // 🧲 자석 모드가 아직 활성 상태면 지지직 사운드 재개
+    if (state.isMagnetModeActive) {
+      _startMagnetLoopSound();
     }
   }
 
@@ -2500,6 +2526,13 @@ class GameNotifier extends StateNotifier<GameState> {
     // 1) 먼저 dispose 플래그 설정 (모든 비동기 작업 중단을 위해)
     _isNotifierDisposed = true;
     _isDisposed = true;
+
+    // 🎵 화면 이탈/노티파이어 해제 시 BGM 확실히 정지 (뒤로가기·탭 전환 등 모든 이탈 경로 커버).
+    //   이후 어떤 콜백이 와도 재생되지 않도록 화면 비활성 플래그도 내린다.
+    _isGameScreenActive = false;
+    try {
+      bgmService.pause(GameType.game1);
+    } catch (_) {}
 
     // 2) 전역 참조 안전하게 정리
     if (globalGameNotifierRef == this) {
