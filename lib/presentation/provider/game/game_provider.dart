@@ -211,6 +211,8 @@ class GameNotifier extends StateNotifier<GameState> {
     return pos >= 3 && pos.isOdd;
   }
   static const String _cycleShownKeyPrefix = 'cycleShown_'; // + round_gameDate
+  // 표시 보류 중인 완주 회차(15/30/45) - 백그라운드 전환 등으로 모달을 놓쳐도 진입 시 복구
+  static const String _cyclePendingKeyPrefix = 'cyclePendingRound_'; // + gameDate
   static const String _cycleBonusGivenKeyPrefix = 'cycleBonusGiven_'; // + gameDate
   static const String _moneyTalkFinishedDateKey = 'moneyTalkFinishedDate'; // 종료한 게임날짜
 
@@ -787,28 +789,49 @@ class GameNotifier extends StateNotifier<GameState> {
     });
   }
 
-  /// 🎉 사이클 완주 체크 - 리필 완료 직후 호출
-  /// 회차가 15/30/45에 도달하면 완주 모달 표시 (각 사이클당 하루 1회)
-  Future<void> _checkCycleComplete() async {
+  /// 🎉 사이클 완주 체크
+  ///
+  /// [completedRound] = '방금 다 쓴 회차'. 리필 완료 직후 소비한 회차를 넘긴다.
+  ///   - 15회차를 다 쓰고 16회차로 넘어가는 시점 → 1사이클 완주
+  ///   - 30회차를 다 쓰고 31회차로 넘어가는 시점 → 2사이클 완주
+  ///   - 45회차를 다 쓰고 31회차로 '순환'하는 시점 → 3사이클 완주
+  ///
+  /// 결과 회차(round)로 판정하지 않는 이유: 30 완주 후와 45 완주 후가 둘 다 31회차라
+  /// 구분이 불가능하다. 그래서 소비한 회차를 기준으로 판정한다.
+  ///
+  /// [completedRound]가 null이면(게임 진입 시 재확인) prefs에 남아 있는
+  /// '표시 보류 중인 완주 회차'를 사용한다.
+  Future<void> _checkCycleComplete({int? completedRound}) async {
     if (!cycleSystemEnabled) return;
     if (_isDisposed || _isNotifierDisposed) return;
 
     try {
-      final int round = _maxRefillCount - state.rewardRefillCount;
-      if (!_cycleRounds.contains(round)) return;
-
       final prefs = await SharedPreferences.getInstance();
       final gameDate = KoreanTimeUtils.getCurrentGameDateKey();
+      final pendingKey = '$_cyclePendingKeyPrefix$gameDate';
+
+      int? round = completedRound;
+      if (round != null) {
+        if (!_cycleRounds.contains(round)) return; // 완주 회차가 아니면 무시
+        // 아직 표시 못 한 완주를 기록해 둔다 (백그라운드 전환 등으로 유실돼도 진입 시 복구)
+        await prefs.setInt(pendingKey, round);
+      } else {
+        // 진입 시 재확인: 보류 중인 완주가 있으면 그걸 표시
+        round = prefs.getInt(pendingKey);
+        if (round == null || !_cycleRounds.contains(round)) return;
+      }
+
       final shownKey = '$_cycleShownKeyPrefix${round}_$gameDate';
 
       // 이미 오늘 본 사이클이면 다시 표시하지 않음 (회차 순환으로 재도달해도 1회만)
       if (prefs.getBool(shownKey) ?? false) {
         print('🎉 ${round}회차 사이클 모달 - 오늘 이미 표시함');
+        await prefs.remove(pendingKey); // 보류 해제
         return;
       }
 
       // 🛡️ 콜백이 연결되지 않았으면(화면 미준비) 표시 이력을 남기지 않고 중단
-      //    → 다음 기회에 다시 시도됨 (미리 마킹하면 모달을 한 번도 못 보고 하루가 지나감)
+      //    → 보류 기록(pendingKey)이 남아 있어 다음 진입/리필 때 다시 시도됨
       if (onShowCycleCompleteDialog == null) {
         print('🎉 ${round}회차 사이클 모달 - 콜백 미연결로 보류');
         return;
@@ -826,11 +849,12 @@ class GameNotifier extends StateNotifier<GameState> {
       if (_isDisposed || _isNotifierDisposed) return;
 
       final cycleIndex = _cycleRounds.indexOf(round) + 1; // 1, 2, 3
-      print('🎉 ${cycleIndex}사이클 완료! (${round}회차, 오늘 적립=$todayTotal)');
+      print('🎉 ${cycleIndex}사이클 완주! (${round}회차 사용 완료, 오늘 적립=$todayTotal)');
       onShowCycleCompleteDialog!.call(cycleIndex, todayTotal);
 
-      // ✅ 실제로 모달을 띄운 뒤에 '오늘 표시함'으로 마킹 (중복 표시 방지)
+      // ✅ 실제로 모달을 띄운 뒤에 '오늘 표시함'으로 마킹 (중복 표시 방지) + 보류 해제
       await prefs.setBool(shownKey, true);
+      await prefs.remove(pendingKey);
     } catch (e) {
       print('🎉 사이클 완주 체크 오류: $e');
     }
@@ -1287,13 +1311,11 @@ class GameNotifier extends StateNotifier<GameState> {
         state = state.copyWith(isLoading: false);
       }
 
-      // 🎉 게임 진입 시 사이클 완주 모달 재확인 (리필 외 경로 보강)
-      //   리필 완료 직후에만 체크하면, 아래 경우 모달이 영영 안 뜬다:
-      //   ① 서버 rewardRefillCount 수동 변경으로 회차가 15/30/45로 점프한 경우(테스트 포함)
-      //   ② 리필 완료 후 완주 체크 전에 앱이 백그라운드로 가 체크가 유실된 경우
-      //      (다음 리필은 이미 16회차를 보므로 15회차 모달은 재시도되지 않음)
-      //   → 진입 시 현재 회차가 완주 회차이고 오늘 미표시면 여기서 띄운다.
-      //     (콜백은 game_screen initState에서 이미 연결됨. 미연결이면 _checkCycleComplete가 보류)
+      // 🎉 게임 진입 시 사이클 완주 모달 재확인 (표시 보류분 복구)
+      //   리필 시점에 완주(15/30/45 소비)를 감지하면 prefs에 '보류' 기록을 남기므로,
+      //   그때 모달을 못 띄웠어도(앱이 백그라운드로 감 / 콜백 미연결 등) 여기서 복구된다.
+      //   보류가 없으면 아무 일도 하지 않는다.
+      //   (콜백은 game_screen initState에서 이미 연결됨. 미연결이면 _checkCycleComplete가 다시 보류)
       await _checkCycleComplete();
     } catch (e) {
       print('게임 초기화 오류: $e');
@@ -3171,6 +3193,8 @@ class GameNotifier extends StateNotifier<GameState> {
     }
 
     final currentRefillCount = state.rewardRefillCount;
+    // 🎉 이번 리필로 '다 쓰게 되는' 회차 (사이클 완주 판정 기준)
+    final int consumedRound = _maxRefillCount - currentRefillCount;
     int remainingRefills = currentRefillCount - 1;
     // [핵심] 무한 리필 순환: 45회차 리필 시 46이 아니라 31회차로 되돌림.
     // → 3사이클(31~45)을 반복하며 금2%/20초/사이클 위치 기반 광고 유지. 서버 시드(50)는 미변경.
@@ -3281,8 +3305,9 @@ class GameNotifier extends StateNotifier<GameState> {
     _isRefilling = false;
     print('🔓 리필 작업 완료 - 서버 동기화 허용');
 
-    // 🎉 사이클 완주 체크 (15/30/45회차 도달 시 모달)
-    await _checkCycleComplete();
+    // 🎉 사이클 완주 체크 - '방금 다 쓴 회차'가 15/30/45면 모달
+    //    (15회차를 소비해 16회차로 넘어간 시점 = 1사이클 완주)
+    await _checkCycleComplete(completedRound: consumedRound);
   }
 }
 
