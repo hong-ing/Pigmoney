@@ -219,7 +219,7 @@ class GameNotifier extends StateNotifier<GameState> {
   /// 🎉 사이클 완주 모달 표시 콜백 (cycleIndex: 1~3, todayTotal: 오늘 모은 머니, null이면 표시 생략)
   Function(int cycleIndex, int? todayTotal)? onShowCycleCompleteDialog;
 
-  /// 오늘 머니톡톡을 종료했는지 확인 (게임 날짜 기준 - 날이 바뀌면 자동 해제)
+  /// 오늘 머니톡톡을 종료했는지 확인 (로컬 캐시 기준) - 보조 판정용
   static Future<bool> isMoneyTalkFinishedToday() async {
     if (!cycleSystemEnabled) return false;
     try {
@@ -232,6 +232,24 @@ class GameNotifier extends StateNotifier<GameState> {
       print('🎉 머니톡톡 종료 상태 확인 오류: $e');
       return false;
     }
+  }
+
+  /// 🎉 오늘 머니톡톡 종료 여부 - '서버 우선, 로컬 보조' 판정.
+  ///   서버(users/{uid}.moneyTalkFinishedDate)가 오늘이면 종료(재설치로 우회 불가).
+  ///   서버 값이 없거나(미로드) 오늘이 아니면 로컬 캐시로 보조 판정.
+  ///   → 둘 중 하나라도 '오늘'이면 종료로 간주(보수적). 날이 바뀌면 둘 다 자동 해제.
+  Future<bool> _isMoneyTalkFinishedTodayServerFirst() async {
+    if (!cycleSystemEnabled) return false;
+    final today = KoreanTimeUtils.getCurrentGameDateKey();
+    // 1) 서버 우선 (currentUserProvider는 앱 시작/진입 시 이미 로드됨 → 추가 읽기 없음)
+    try {
+      final user = _ref.read(currentUserProvider);
+      if (user?.moneyTalkFinishedDate == today) return true;
+    } catch (e) {
+      print('🎉 종료 상태 서버 확인 오류(로컬로 보조): $e');
+    }
+    // 2) 로컬 보조
+    return await isMoneyTalkFinishedToday();
   }
 
   // ✅ 전면광고 준비 중 플래그 (중복 호출 방지)
@@ -864,7 +882,7 @@ class GameNotifier extends StateNotifier<GameState> {
   Future<void> _loadMoneyTalkFinishedState() async {
     if (!cycleSystemEnabled) return;
     try {
-      final finished = await isMoneyTalkFinishedToday();
+      final finished = await _isMoneyTalkFinishedTodayServerFirst();
       if (_isDisposed || _isNotifierDisposed) return;
       if (finished != state.isMoneyTalkFinished) {
         state = state.copyWith(isMoneyTalkFinished: finished);
@@ -891,25 +909,26 @@ class GameNotifier extends StateNotifier<GameState> {
       final prefs = await SharedPreferences.getInstance();
       final gameDate = KoreanTimeUtils.getCurrentGameDateKey();
 
-      // 1) 완주 보상 지급 (하루 1회만 - 중복 방지)
-      final bonusKey = '$_cycleBonusGivenKeyPrefix$gameDate';
-      if (!(prefs.getBool(bonusKey) ?? false)) {
-        await prefs.setBool(bonusKey, true); // 먼저 마킹 (중복 호출 차단)
-        try {
-          await _ref.read(userRepositoryProvider).addEarning(
-                amount: _cycleBonusAmount,
-                source: 'cycleBonus',
-              );
-          bonusGiven = true;
-          print('🎉 완주 보상 지급: $_cycleBonusAmount M');
-        } catch (e) {
-          // 지급 실패 시 마킹 해제 (다음 시도 가능하도록)
-          await prefs.setBool(bonusKey, false);
-          print('🎉 완주 보상 지급 실패: $e');
-        }
-      } else {
-        print('🎉 완주 보상 - 오늘 이미 지급됨');
+      // 1) 완주 보상 지급 - 🔒 서버 원자적 검증 (재설치·동시탭 우회 불가)
+      //    Firestore 트랜잭션에서 cycleBonusGivenDate를 확인해 오늘 이미 받았으면 지급 안 함.
+      String claimResult;
+      try {
+        claimResult = await _ref.read(userRepositoryProvider).claimCycleBonusAtomic(
+              amount: _cycleBonusAmount,
+              gameDate: gameDate,
+            );
+      } catch (e) {
+        // 네트워크/서버 오류: 종료 처리하지 않고 보류 (재시도 가능, 상태 안전)
+        print('🎉 완주 보상 서버 지급 실패 - 종료 처리 보류: $e');
+        return false;
       }
+      bonusGiven = claimResult == 'given';
+      print(bonusGiven
+          ? '🎉 완주 보상 지급 완료(서버): $_cycleBonusAmount M'
+          : '🎉 완주 보상 - 오늘 이미 지급됨(서버 확인) → 지급 안 함');
+
+      // 로컬 캐시(보조) 마킹 - 서버가 authoritative. 오프라인/빠른 판정용 힌트일 뿐.
+      await prefs.setBool('$_cycleBonusGivenKeyPrefix$gameDate', true);
 
       // 2) 지갑 자동 충전(리필) 타이머 정지 - 오늘은 더 이상 충전 안 됨
       _coinsFillTimer?.cancel();
@@ -928,7 +947,8 @@ class GameNotifier extends StateNotifier<GameState> {
       await NotificationService().cancelCoinPurseFullNotification();
       print('🎉 지갑 가득참 알림 취소');
 
-      // 4) 오늘 종료 상태 저장 (게임 날짜 기준 - 날이 바뀌면 자동 해제)
+      // 4) 오늘 종료 상태 저장 (로컬 캐시 - 서버 moneyTalkFinishedDate는 claim에서 이미 원자적 기록됨)
+      //    게임 날짜 기준이라 날이 바뀌면 서버·로컬 모두 자동 해제.
       await prefs.setString(_moneyTalkFinishedDateKey, gameDate);
       if (!_isDisposed && !_isNotifierDisposed) {
         // 화면(빈 바닥 / '내일 다시 만나요' / 지갑 0·비활성)에 즉시 반영
@@ -1310,6 +1330,11 @@ class GameNotifier extends StateNotifier<GameState> {
       if (mounted) {
         state = state.copyWith(isLoading: false);
       }
+
+      // 🎉 종료 상태 재평가 - 서버 우선 (유저가 로드된 뒤 서버 moneyTalkFinishedDate 반영).
+      //   생성자에서의 최초 판정은 유저 미로드 시 로컬로만 판단했을 수 있으므로 여기서 다시 확인.
+      //   (재설치로 로컬이 지워져도 서버가 '오늘'이면 종료 상태로 진입 → 우회 차단)
+      await _loadMoneyTalkFinishedState();
 
       // 🎉 게임 진입 시 사이클 완주 모달 재확인 (표시 보류분 복구)
       //   리필 시점에 완주(15/30/45 소비)를 감지하면 prefs에 '보류' 기록을 남기므로,

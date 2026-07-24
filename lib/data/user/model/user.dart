@@ -32,6 +32,10 @@ class User {
   int rewardRefillCount;
   Map<String, dynamic>? attendanceData; // 출석체크 데이터
   final String resetVersion; // 추가: 서버 리셋 버전 (yyyy-MM-dd 형태)
+  // 🎉 머니톡톡 사이클 완주 관련 (게임 날짜 문자열 yyyy-MM-dd, 새벽 5시 기준).
+  //   재설치 우회 방지를 위해 서버에 저장. 날짜가 오늘과 다르면 자동 해제(다음날 재도전 가능).
+  final String? moneyTalkFinishedDate; // 오늘 머니톡톡 종료한 게임 날짜
+  final String? cycleBonusGivenDate; // 완주 보상(10,000M) 지급받은 게임 날짜
   final List<InviteFriend> inviteFriendList; // 초대한 친구 목록
   int purchaseValid; // 구매 검증 상태: 0=승인(기본값), 1=대기(관리자 확인 필요), 2=영구승인
   int deviceChangeCount; // 기기 변경 횟수: 0=변경없음, 1+=변경이력있음 (3회까지 허용)
@@ -78,6 +82,8 @@ class User {
     int rewardRefillCount = 50,
     this.attendanceData,
     String? resetVersion,
+    this.moneyTalkFinishedDate,
+    this.cycleBonusGivenDate,
     this.inviteFriendList = const [],
     this.kakaoId,
     this.accountEmail,
@@ -171,6 +177,8 @@ class User {
       rewardRefillCount: _capRewardRefillCount(data['rewardRefillCount'] ?? 50),
       attendanceData: attendanceData,
       resetVersion: data['resetVersion'] ?? _getKoreanDateString(),
+      moneyTalkFinishedDate: data['moneyTalkFinishedDate'] as String?,
+      cycleBonusGivenDate: data['cycleBonusGivenDate'] as String?,
       inviteFriendList: inviteFriendList,
       kakaoId: data['kakaoId'],
       accountEmail: data['accountEmail'],
@@ -215,6 +223,8 @@ class User {
     rewardRefillCount: _capRewardRefillCount((json['rewardRefillCount'] ?? 50) as int),
     attendanceData: json['attendanceData'] as Map<String, dynamic>?,
     resetVersion: json['resetVersion'] ?? _getKoreanDateString(),
+    moneyTalkFinishedDate: json['moneyTalkFinishedDate'] as String?,
+    cycleBonusGivenDate: json['cycleBonusGivenDate'] as String?,
     inviteFriendList: (json['inviteFriendList'] as List<dynamic>? ?? [])
         .map((e) => InviteFriend.fromJson(e as Map<String, dynamic>))
         .toList(),
@@ -258,6 +268,8 @@ class User {
     'rewardRefillCount': rewardRefillCount,
     'attendanceData': attendanceData,
     'resetVersion': resetVersion,
+    'moneyTalkFinishedDate': moneyTalkFinishedDate,
+    'cycleBonusGivenDate': cycleBonusGivenDate,
     'inviteFriendList': inviteFriendList.map((e) => e.toJson()).toList(),
     'kakaoId': kakaoId,
     'accountEmail': accountEmail,
@@ -299,6 +311,8 @@ class User {
     int? rewardRefillCount,
     Map<String, dynamic>? attendanceData,
     String? resetVersion,
+    String? moneyTalkFinishedDate,
+    String? cycleBonusGivenDate,
     List<InviteFriend>? inviteFriendList,
     String? kakaoId,
     String? accountEmail,
@@ -339,6 +353,8 @@ class User {
     rewardRefillCount: rewardRefillCount != null ? _capRewardRefillCount(rewardRefillCount) : this.rewardRefillCount,
     attendanceData: attendanceData ?? this.attendanceData,
     resetVersion: resetVersion ?? this.resetVersion,
+    moneyTalkFinishedDate: moneyTalkFinishedDate ?? this.moneyTalkFinishedDate,
+    cycleBonusGivenDate: cycleBonusGivenDate ?? this.cycleBonusGivenDate,
     inviteFriendList: inviteFriendList ?? this.inviteFriendList,
     kakaoId: kakaoId ?? this.kakaoId,
     accountEmail: accountEmail ?? this.accountEmail,

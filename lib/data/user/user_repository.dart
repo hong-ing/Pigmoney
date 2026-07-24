@@ -365,6 +365,83 @@ class UserRepository {
     }
   }
 
+  /// 🎉 사이클 완주 보상 원자적 지급 (재설치 우회 불가).
+  ///
+  /// Firestore 트랜잭션으로 users/{uid}.cycleBonusGivenDate를 확인해,
+  /// [gameDate]에 이미 지급됐으면 지급하지 않는다(재설치·동시탭 우회 차단).
+  /// 지급 시 money/totalEarnings 증가 + 일/월/랭킹 집계 + cycleBonusGivenDate/moneyTalkFinishedDate를
+  /// 한 트랜잭션에서 원자적으로 기록한다.
+  ///
+  /// 반환: 'given'(이번에 지급) / 'already'(오늘 이미 지급됨, 지급 안 함).
+  /// 실패 시 예외를 던진다(호출부에서 종료 처리 보류).
+  Future<String> claimCycleBonusAtomic({
+    required int amount,
+    required String gameDate, // yyyy-MM-dd (getCurrentGameDateKey)
+    String source = 'cycleBonus',
+    DateTime? ts,
+  }) async {
+    final authUser = _auth.currentUser;
+    if (authUser == null) {
+      throw Exception('로그인이 필요합니다.');
+    }
+    final uid = authUser.uid;
+    final now = ts ?? DateTime.now();
+    final monthKey = gameDate.substring(0, 7); // yyyy-MM
+
+    final userRef = _firestore.doc('users/$uid');
+    final dailyRef = _firestore.doc('users/$uid/daily/$gameDate');
+    final monthlyRef = _firestore.doc('users/$uid/monthly/$monthKey');
+    final dailyRankRef = _firestore.doc('rankings/daily/$gameDate/$uid');
+    final monthlyRankRef = _firestore.doc('rankings/monthly/$monthKey/$uid');
+
+    return await _firestore.runTransaction<String>((transaction) async {
+      // ── 읽기 먼저 (트랜잭션 규칙) ──
+      final userDoc = await transaction.get(userRef);
+      if (!userDoc.exists) {
+        throw Exception('사용자 문서가 존재하지 않습니다');
+      }
+      final data = userDoc.data() as Map<String, dynamic>;
+
+      // 이미 오늘 지급됐으면 지급하지 않고, 종료 상태만 확실히 마킹
+      if (data['cycleBonusGivenDate'] == gameDate) {
+        if (data['moneyTalkFinishedDate'] != gameDate) {
+          transaction.update(userRef, {'moneyTalkFinishedDate': gameDate});
+        }
+        return 'already';
+      }
+
+      final nickname = data['nickname'] as String? ?? uid;
+
+      // 일별 집계 (배열 + 합계 + 출처별)
+      transaction.set(
+        dailyRef,
+        {
+          'dailyMoney': FieldValue.arrayUnion([
+            {'amount': amount, 'ts': Timestamp.fromDate(now), 'source': source},
+          ]),
+          'total': FieldValue.increment(amount),
+          'bySource': {source: FieldValue.increment(amount)},
+        },
+        SetOptions(merge: true),
+      );
+      // 월별 집계
+      transaction.set(monthlyRef, {'monthMoney': FieldValue.increment(amount)}, SetOptions(merge: true));
+      // 랭킹
+      transaction.set(dailyRankRef, {'score': FieldValue.increment(amount), 'nickname': nickname}, SetOptions(merge: true));
+      transaction.set(monthlyRankRef, {'score': FieldValue.increment(amount), 'nickname': nickname}, SetOptions(merge: true));
+
+      // 유저 프로필: 머니 증가 + 완주 지급/종료 날짜 마킹 (원자적)
+      transaction.update(userRef, {
+        'money': FieldValue.increment(amount),
+        'totalEarnings': FieldValue.increment(amount),
+        'cycleBonusGivenDate': gameDate,
+        'moneyTalkFinishedDate': gameDate,
+      });
+
+      return 'given';
+    });
+  }
+
   /// 오늘(새벽 5시 기준 게임 날짜) 적립 합계 조회 - 사이클 완주 모달 표시용
   /// 실패하거나 문서가 없으면 null (호출부에서 해당 줄을 생략)
   /// 오늘(게임 날짜 기준) 적립 합계 조회
